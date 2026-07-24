@@ -29,6 +29,20 @@
 
   var ns = 'vh:' + here + ':';
 
+  // 浏览量信标。生产环境 nginx 直接 serve 作品静态文件、不经过后端，
+  // 所以必须由页面主动上报一次，否则浏览量永远是 0。
+  // 只在正式作品页统计，预览不算（老师反复预览不该刷学员的数据）。
+  if (here.indexOf('/_preview/') === -1) {
+    try {
+      var payload = JSON.stringify({ path: here });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/vibehub/_hit', new Blob([payload], { type: 'application/json' }));
+      } else {
+        fetch('/vibehub/_hit', { method: 'POST', body: payload, headers: { 'content-type': 'application/json' }, keepalive: true });
+      }
+    } catch (e) { /* 统计失败不影响作品 */ }
+  }
+
   window.vibehub = {
     /** 存一条数据 */
     save: function (collection, data) { return req('POST', '/' + encodeURIComponent(collection), data); },

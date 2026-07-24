@@ -131,10 +131,16 @@ app.get(`${WORKS_PREFIX}/_preview/:pid/*`, async (req, reply) =>
   serveFrom(join(paths.previews, req.params.pid), req.params['*'], reply));
 app.get(`${WORKS_PREFIX}/_preview/:pid`, async (req, reply) => reply.redirect(`${WORKS_PREFIX}/_preview/${req.params.pid}/`));
 
-app.get(`${WORKS_PREFIX}/:username/:slug/*`, async (req, reply) => {
-  countView(req.params.username, req.params.slug);
-  return serveFrom(join(paths.sites, req.params.username, req.params.slug), req.params['*'], reply);
+// 浏览量信标。生产环境 nginx 直接 serve 静态文件不经过这里，
+// 所以由作品页里注入的 SDK 主动 POST 一次。
+app.post(`${WORKS_PREFIX}/_hit`, async (req, reply) => {
+  const m = String(req.body?.path || '').match(/\/vibehub\/([a-z0-9][a-z0-9_-]*)\/([a-z0-9][a-z0-9_-]*)\//i);
+  if (m) countView(m[1], m[2]);
+  return reply.code(204).send();
 });
+
+app.get(`${WORKS_PREFIX}/:username/:slug/*`, async (req, reply) =>
+  serveFrom(join(paths.sites, req.params.username, req.params.slug), req.params['*'], reply));
 app.get(`${WORKS_PREFIX}/:username/:slug`, async (req, reply) =>
   reply.redirect(`${WORKS_PREFIX}/${req.params.username}/${req.params.slug}/`));
 
