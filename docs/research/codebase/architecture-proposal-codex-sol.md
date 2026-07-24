@@ -9,10 +9,10 @@
 
 #### 已核实事实
 
-- 生产机为腾讯云南京 Lighthouse `1.13.175.253`，Ubuntu 24.04，2 vCPU、7.4 GB RAM、79 GB 磁盘，当前几乎空载。
+- 生产机为腾讯云南京 Lighthouse 南京机，Ubuntu 24.04，2 vCPU、7.4 GB RAM、79 GB 磁盘，当前几乎空载。
 - nginx 已监听 80 与 8080，certbot 已安装，443 尚未监听。
 - `supermind-ai.cn` 已解析到该机，80 端口返回 200；现有信息足以确认主域名已备案。子域名接入和 HTTPS 仍需实际验收。
-- 现有静态部署使用 `/var/www/sites/<name>/` 与 `http://1.13.175.253:8080/<name>/`；后端使用 `backdeploy`、PM2 和自助反代。
+- 现有静态部署使用 `/var/www/sites/<name>/` 与 `http://<南京机>:8080/<name>/`；后端使用受限部署账号、PM2 和自助反代。
 - 用户包含零基础学员和未成年人；作品公开前必须经老师审核。
 - 已有自托管 Umami：`statistics.superbrain-ai.com`。
 - 产品要求版本、预览、审核、正式发布分离；新版本驳回时旧正式版本继续可访问；AI 诊断必须绑定明确版本和时间，百分比必须能由下方诊断项解释。
@@ -136,10 +136,10 @@ P1 的 BaaS 只提供以下受控积木：
 
 1. 先开放并验证 443，再把 80 统一 301 到 HTTPS；8080 只保留现有兼容用途，不作为学员正式地址。
 2. 配置 wildcard DNS：
-   - `hub.supermind-ai.cn -> 1.13.175.253`
-   - `*.works.supermind-ai.cn -> 1.13.175.253`
-   - `*.preview.supermind-ai.cn -> 1.13.175.253`
-   - P1 启用文件服务时再配置 `assets.supermind-ai.cn -> 1.13.175.253` 和对应证书。
+   - `hub.supermind-ai.cn -> 南京机
+   - `*.works.supermind-ai.cn -> 南京机
+   - `*.preview.supermind-ai.cn -> 南京机
+   - P1 启用文件服务时再配置 `assets.supermind-ai.cn -> 南京机 和对应证书。
 3. 申请并自动续期：
    - `*.works.supermind-ai.cn`
    - `*.preview.supermind-ai.cn`
