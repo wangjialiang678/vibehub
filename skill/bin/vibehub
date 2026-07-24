@@ -1,0 +1,226 @@
+#!/usr/bin/env node
+/**
+ * vibehub —— 把你的作品交给 VibeHub。
+ * 零依赖，Node ≥ 20。学员的 AI 工具调用它。
+ */
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, chmodSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve, relative, basename } from 'node:path';
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+
+const CRED_DIR = join(homedir(), '.vibehub');
+const CRED = join(CRED_DIR, 'credentials.json');
+const DEFAULT_API = process.env.VIBEHUB_API || 'http://127.0.0.1:4300';
+
+const c = { r: '\x1b[31m', g: '\x1b[32m', y: '\x1b[33m', b: '\x1b[34m', d: '\x1b[2m', x: '\x1b[0m', bold: '\x1b[1m' };
+const say = (...a) => console.log(...a);
+const die = (msg, hint) => { console.error(`${c.r}✗${c.x} ${msg}`); if (hint) console.error(`${c.d}  → ${hint}${c.x}`); process.exit(1); };
+
+function loadCred() {
+  if (!existsSync(CRED)) die('还没有连接到 VibeHub。', '运行 vibehub bind <邀请码>');
+  return JSON.parse(readFileSync(CRED, 'utf8'));
+}
+function saveCred(data) {
+  mkdirSync(CRED_DIR, { recursive: true });
+  writeFileSync(CRED, JSON.stringify(data, null, 2));
+  chmodSync(CRED, 0o600);           // 凭证不给别人读
+}
+
+async function api(path, { method = 'GET', body, token, form } = {}) {
+  const cred = token === false ? null : (token ? { token } : (existsSync(CRED) ? loadCred() : null));
+  const headers = {};
+  if (cred?.token) headers.authorization = `Bearer ${cred.token}`;
+  let payload;
+  if (form) payload = form;
+  else if (body !== undefined) { headers['content-type'] = 'application/json'; payload = JSON.stringify(body); }
+  const base = cred?.api || DEFAULT_API;
+  const res = await fetch(base + path, { method, headers, body: payload });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) die(data.error?.message || `请求失败（${res.status}）`, data.error?.hint);
+  return data;
+}
+
+// ── 打包 ─────────────────────────────────────────────────────────────
+const IGNORE = new Set(['node_modules', '.git', '.DS_Store', 'dist.tgz', '.vibehub', 'venv', '__pycache__', '.venv']);
+
+function readIgnoreFile(dir) {
+  const f = join(dir, '.vibehubignore');
+  if (!existsSync(f)) return [];
+  return readFileSync(f, 'utf8').split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'));
+}
+
+function pickSourceDir(dir) {
+  // 有构建产物就用产物；否则用当前目录
+  const pkgPath = join(dir, 'package.json');
+  if (existsSync(pkgPath)) {
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    if (pkg.scripts?.build) {
+      say(`${c.d}检测到构建脚本，先跑一次 npm run build …${c.x}`);
+      try { execFileSync('npm', ['run', 'build'], { cwd: dir, stdio: 'inherit' }); }
+      catch { die('构建失败了。', '先在本地把 npm run build 跑通再提交'); }
+    }
+    for (const d of ['dist', 'build', 'out', 'public']) {
+      if (existsSync(join(dir, d, 'index.html'))) { say(`${c.d}使用构建产物目录 ${d}/${c.x}`); return join(dir, d); }
+    }
+  }
+  return dir;
+}
+
+function makeTarball(srcDir) {
+  const extra = readIgnoreFile(srcDir);
+  const out = join(tmpdir(), `vibehub_${Date.now()}.tgz`);
+  const args = ['-czf', out];
+  for (const name of [...IGNORE, ...extra]) args.push('--exclude', name);
+  args.push('-C', srcDir, '.');
+  // COPYFILE_DISABLE=1：不让 macOS 的 tar 附带 AppleDouble(._xxx) 扩展属性文件
+  execFileSync('tar', args, { stdio: 'pipe', env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  return out;
+}
+
+function countFiles(dir, ignore = IGNORE) {
+  let n = 0;
+  const walk = (d) => {
+    for (const name of readdirSync(d)) {
+      if (ignore.has(name)) continue;
+      const p = join(d, name);
+      const st = statSync(p);
+      if (st.isDirectory()) walk(p); else n += 1;
+    }
+  };
+  walk(dir);
+  return n;
+}
+
+// ── 命令 ─────────────────────────────────────────────────────────────
+const cmds = {
+  async bind(code) {
+    if (!code) die('请提供邀请码。', '用法：vibehub bind <邀请码>');
+    const api_base = process.env.VIBEHUB_API || DEFAULT_API;
+    const res = await fetch(api_base + '/api/skill/bind', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code, device_name: `${basename(homedir())} · ${process.env.TERM_PROGRAM || 'CLI'}` }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) die(data.error?.message || '绑定失败', data.error?.hint);
+    saveCred({ token: data.token, api: api_base, camp: data.camp, project: data.project, user: data.user });
+    say(`${c.g}✓${c.x} ${data.message}`);
+    say(`${c.d}凭证已保存到 ${CRED}${c.x}`);
+    say(`\n下一步：写好你的网页，然后运行 ${c.bold}vibehub deploy${c.x}`);
+  },
+
+  async status() {
+    const s = await api('/api/skill/project');
+    const p = s.project;
+    say(`\n${c.bold}${p.title}${c.x}  ${c.d}${s.camp.name}${c.x}`);
+    say(`${c.d}────────────────────────────────${c.x}`);
+    const statusText = { unpublished: '还没上线', published: '已上线', published_with_pending: '已上线（有新版本待审核）', suspended: '已下线' };
+    say(`状态      ${statusText[p.publish_status] || p.publish_status}`);
+    if (s.live_version) say(`线上版本  ${c.g}${s.live_version.label}${c.x}   ${p.live_url || ''}`);
+    if (s.pending_version) {
+      say(`待审版本  ${c.y}${s.pending_version.label}${c.x}   ${s.pending_version.preview_url}`);
+      say(`          ${c.d}审核通过后才会替换线上版本${c.x}`);
+    }
+    const d = s.latest_diagnosis;
+    if (d) {
+      say(`\n完成度    ${c.bold}${d.score}%${c.x}  ${c.d}(${d.applicable_earned}/${d.applicable_max} 分，只算适用项)${c.x}`);
+      say(`          ${d.summary}`);
+      for (const i of d.items) {
+        const mark = i.applicability === 'not_applicable' ? `${c.d}—${c.x}`
+          : i.result === 'pass' ? `${c.g}✓${c.x}` : i.result === 'fail' ? `${c.r}✗${c.x}` : `${c.y}?${c.x}`;
+        const pts = i.applicability === 'not_applicable' ? `${c.d}不适用${c.x}` : `${i.earned_points}/${i.max_points}`;
+        say(`  ${mark} ${i.label.padEnd(18, ' ')} ${pts}`);
+      }
+      if (d.next_steps?.length) {
+        say(`\n${c.bold}下一步${c.x}`);
+        d.next_steps.forEach((n, i) => say(`  ${i + 1}. ${n}`));
+      }
+    }
+    if (s.last_review?.status === 'rejected') {
+      say(`\n${c.y}老师退回了${c.x}：${s.last_review.comment}`);
+    }
+    say('');
+  },
+
+  async deploy(...args) {
+    const cred = loadCred();
+    let summary = null, flows = [], label = null, dir = process.cwd();
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--summary') summary = args[++i];
+      else if (args[i] === '--flows') flows = String(args[++i]).split(',').map((s) => s.trim()).filter(Boolean);
+      else if (args[i] === '--label') label = args[++i];
+      else if (!args[i].startsWith('-')) dir = resolve(args[i]);
+    }
+
+    const src = pickSourceDir(dir);
+    if (!existsSync(join(src, 'index.html'))) {
+      die('没找到 index.html，你的网页需要有一个首页文件。',
+        '确认你在网页目录里；如果用了构建工具，先 npm run build');
+    }
+
+    say(`${c.d}打包 ${relative(process.cwd(), src) || '.'} …${c.x}`);
+    const tgz = makeTarball(src);
+    const size = statSync(tgz).size;
+    const sha = createHash('sha256').update(readFileSync(tgz)).digest('hex');
+    say(`${c.d}${countFiles(src)} 个文件，${(size / 1024).toFixed(0)} KB${c.x}`);
+
+    const pre = await api('/api/skill/versions/preflight', { method: 'POST', body: { sha256: sha, size } });
+    if (pre.duplicate) { say(`${c.y}○${c.x} ${pre.message}`); return; }
+
+    const fd = new FormData();
+    fd.append('meta', JSON.stringify({ label, summary, flows }));
+    fd.append('bundle', new Blob([readFileSync(tgz)]), 'bundle.tgz');
+    const res = await fetch(cred.api + '/api/skill/versions', {
+      method: 'POST', headers: { authorization: `Bearer ${cred.token}` }, body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) die(data.error?.message || '提交失败', data.error?.hint);
+
+    say(`\n${c.g}✓${c.x} ${data.label} 已提交`);
+    say(`  预览  ${c.b}${data.preview_url}${c.x}`);
+    if (data.rewrites) say(`  ${c.d}自动修正了 ${data.rewrites} 处绝对路径引用（作品跑在子目录下）${c.x}`);
+    if (data.diagnosis) {
+      say(`  完成度 ${c.bold}${data.diagnosis.score}%${c.x} — ${data.diagnosis.summary}`);
+      (data.diagnosis.next_steps || []).forEach((n) => say(`    ${c.d}·${c.x} ${n}`));
+    }
+    say(`\n${data.message}`);
+  },
+
+  async open() {
+    const cred = loadCred();
+    const s = await api('/api/skill/project');
+    const url = s.project.live_url || s.pending_version?.preview_url;
+    if (!url) die('还没有可打开的版本。', '先运行 vibehub deploy');
+    execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+    say(`已打开 ${url}`);
+  },
+
+  async logs() {
+    const s = await api('/api/skill/project');
+    say(`\n${c.bold}最近发生了什么${c.x}`);
+    for (const e of s.timeline || []) {
+      const icon = { submit: '↑', publish: '✓', reject: '↩' }[e.kind] || '·';
+      say(`  ${icon} ${c.d}${e.at.slice(5, 16).replace('T', ' ')}${c.x}  ${e.title}  ${c.d}${e.detail || ''}${c.x}`);
+    }
+    say('');
+  },
+
+  help() {
+    say(`
+${c.bold}vibehub${c.x} — 把你的作品交给 VibeHub
+
+  ${c.bold}vibehub bind <邀请码>${c.x}          用邀请码连上平台
+  ${c.bold}vibehub deploy${c.x}                 打包当前目录并提交
+      --summary "本次更新说明"
+      --flows "上传声音,查看地图"    声明核心操作路径（诊断会用到）
+  ${c.bold}vibehub status${c.x}                 看当前状态与 AI 诊断
+  ${c.bold}vibehub logs${c.x}                   看最近的提交与审核记录
+  ${c.bold}vibehub open${c.x}                   在浏览器打开你的作品
+`);
+  },
+};
+
+const [cmd, ...rest] = process.argv.slice(2);
+const fn = cmds[cmd] || cmds.help;
+fn(...rest).catch?.((e) => die(e.message));

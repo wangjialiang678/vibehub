@@ -1,0 +1,92 @@
+# VibeHub — 把你的作品变成一个网址
+
+> 这份文件给 Codex / WorkBuddy 等读 AGENTS.md 的工具；Claude Code 读同目录的 SKILL.md，内容一致。
+
+你在帮学员把他们做的网页发布到 VibeHub 平台。学员大多是零基础，**不要跟他们讲服务器、域名、构建这些词**。
+
+## 前提
+
+`vibehub` 命令在 `<skill目录>/bin/vibehub`（Node ≥ 20，零依赖）。
+建议先做一个别名，后面直接用 `vibehub`：
+
+```bash
+alias vibehub='node <skill目录>/bin/vibehub'
+```
+
+## 第一次：接入
+
+学员手上有一个邀请码（形如 `CAMP-7K3P`，老师发的）。
+
+```bash
+vibehub bind CAMP-7K3P
+```
+
+成功后会显示学员属于哪个课程、作品叫什么名字。凭证存在 `~/.vibehub/credentials.json`（权限 0600）。
+
+**常见问题**：
+- 「这个邀请码不存在」→ 让学员确认有没有把数字 0 看成字母 O
+- 「已经绑定 3 台设备」→ 找老师撤销旧设备或要新码
+- 「已经被撤销」→ 找老师要新码
+
+## 每次：提交作品
+
+在学员的网页目录里（有 `index.html` 的那个目录）：
+
+```bash
+vibehub deploy --summary "本次做了什么" --flows "上传声音,查看地图"
+```
+
+- `--summary`：**一句话说清这次改了什么**，老师审核时会看到，值得认真写
+- `--flows`：这个作品的核心操作是什么（逗号分隔）。诊断会据此判断功能完成度；不写就不算这一项
+
+命令会自动：
+1. 如果项目有 `package.json` 且有 build 脚本 → 先构建，只提交构建产物
+2. 排除 `node_modules`、`.git` 等目录（也可以写 `.vibehubignore`）
+3. 内容和上次完全一样时不重复提交
+4. **自动修正绝对路径引用**（作品跑在子目录下，`/style.css` 这种写法会 404，平台会帮忙改成相对路径并告诉你改了几处）
+5. 生成一个预览地址，并进入老师的审核队列
+
+**提交 ≠ 上线。** 要跟学员说清楚：预览地址是给他自己和老师看的；审核通过后才会有正式网址。
+
+## 查看状态
+
+```bash
+vibehub status     # 当前状态 + AI 诊断 + 下一步建议
+vibehub logs       # 最近的提交与审核记录（含老师的退回意见）
+vibehub open       # 浏览器打开作品
+```
+
+`status` 会显示一个完成度百分比和逐项得分。**跟学员解释时要说清楚**：
+- 标「不适用」的项不算分（比如作品本来就不需要存数据，服务端那项就不适用）
+- 标「需人工确认」的项是平台没法自动验证的，得学员自己走一遍
+
+## 学员的作品要存数据怎么办
+
+**不要让学员写后端。** 平台在每个作品页自动注入了 `vibehub` 对象，直接用：
+
+```javascript
+await vibehub.save('sounds', { title: '早高峰的路口', lat: 31.2 });  // 存一条
+const items = await vibehub.list('sounds', { limit: 20 });          // 读列表
+await vibehub.remove('sounds', id);                                  // 删一条
+const url = await vibehub.upload(file);                              // 传文件，返回可用地址
+const n = await vibehub.counter('visits');                           // 计数器 +1
+
+vibehub.storage.set('draft', {...});    // 本地存储（自动按作品命名空间隔离）
+vibehub.storage.get('draft');
+```
+
+不需要 import，不需要 key，不需要配置。写完 `vibehub deploy` 就能用。
+
+**注意**：作品是公开网页，任何人都能看源码。**不要往作品里写任何密码、密钥或私人信息。**
+
+## 被退回了怎么办
+
+`vibehub status` 会显示老师的意见。按意见改完，重新 `vibehub deploy` 就行。
+**已经上线的旧版本不受影响**，访客看到的还是那个能用的版本。
+
+## 你（AI）该注意的
+
+- 学员说「上线了吗」「发布了吗」→ 先跑 `vibehub status`，别猜
+- 学员的作品打不开 → 先看 `status` 的诊断项，`页面引用的文件都在` 那项失败最常见
+- **不要替学员决定要不要提交审核**——`deploy` 就会自动进队列，说清楚就行
+- 部署失败时把错误里的 `hint` 念给学员听，那是写给他看的

@@ -9,10 +9,10 @@
 
 #### 已核实事实
 
-- 生产机为腾讯云南京 Lighthouse `<南京机 IP，见 server-vault TC_NANJING_*>`，Ubuntu 24.04，2 vCPU、7.4 GB RAM、79 GB 磁盘，当前几乎空载。
+- 生产机为腾讯云南京 Lighthouse `1.13.175.253`，Ubuntu 24.04，2 vCPU、7.4 GB RAM、79 GB 磁盘，当前几乎空载。
 - nginx 已监听 80 与 8080，certbot 已安装，443 尚未监听。
 - `supermind-ai.cn` 已解析到该机，80 端口返回 200；现有信息足以确认主域名已备案。子域名接入和 HTTPS 仍需实际验收。
-- 现有静态部署使用 `/var/www/sites/<name>/` 与 `http://<南京机 IP，见 server-vault TC_NANJING_*>:8080/<name>/`；后端使用 `backdeploy`、PM2 和自助反代。
+- 现有静态部署使用 `/var/www/sites/<name>/` 与 `http://1.13.175.253:8080/<name>/`；后端使用 `backdeploy`、PM2 和自助反代。
 - 用户包含零基础学员和未成年人；作品公开前必须经老师审核。
 - 已有自托管 Umami：`statistics.superbrain-ai.com`。
 - 产品要求版本、预览、审核、正式发布分离；新版本驳回时旧正式版本继续可访问；AI 诊断必须绑定明确版本和时间，百分比必须能由下方诊断项解释。
@@ -78,7 +78,7 @@ P1 的 BaaS 只提供以下受控积木：
 
 - 数据：按项目命名空间创建有限数量的 collection；P1 首批只支持公开读、匿名追加和“项目成员在 hub 管理”三类策略；有 schema、单条大小、总条数和日写入配额。作品自己的终端用户账号体系不在 P1，避免把 BaaS 偷偷扩成通用身份平台。
 - 文件：通过项目 workspace 获得一次性上传会话；限制类型、大小和日流量；媒体走腾讯 VOD/COS。
-- AI：使用公开项目标识申请短期运行时会话，再经过项目/IP/设备配额、安全过滤和模型别名路由；上游 API key 永不下发给作品。
+- AI：使用公开项目标识申请短期运行时会话，再经过单请求 token/超时限制、并发限制、项目日硬预算、活动/全局熔断、项目/IP/设备配额、安全过滤和模型别名路由；Provider 账单异常告警，上游 API key 永不下发给作品。
 - 不提供任意 SQL、任意云函数、shell、定时任务、后台常驻进程或自定义网络代理。
 
 浏览器里的“项目 key”只能是可公开的路由标识，不能当秘密。真正的保护来自服务端策略、短期会话、速率限制、配额、内容安全和数据访问规则，不能依赖把密钥藏在前端代码里。
@@ -136,8 +136,10 @@ P1 的 BaaS 只提供以下受控积木：
 
 1. 先开放并验证 443，再把 80 统一 301 到 HTTPS；8080 只保留现有兼容用途，不作为学员正式地址。
 2. 配置 wildcard DNS：
-   - `*.works.supermind-ai.cn -> <南京机 IP，见 server-vault TC_NANJING_*>`
-   - `*.preview.supermind-ai.cn -> <南京机 IP，见 server-vault TC_NANJING_*>`
+   - `hub.supermind-ai.cn -> 1.13.175.253`
+   - `*.works.supermind-ai.cn -> 1.13.175.253`
+   - `*.preview.supermind-ai.cn -> 1.13.175.253`
+   - P1 启用文件服务时再配置 `assets.supermind-ai.cn -> 1.13.175.253` 和对应证书。
 3. 申请并自动续期：
    - `*.works.supermind-ai.cn`
    - `*.preview.supermind-ai.cn`
@@ -145,8 +147,12 @@ P1 的 BaaS 只提供以下受控积木：
    可以是一张 SAN 证书或分开管理；分开能降低一次证书配置错误的影响。
 4. 平台会话 cookie 只设为 `hub.supermind-ai.cn` 的 host-only cookie，绝不设置 `Domain=.supermind-ai.cn`。
 5. 正式作品默认不允许跨域读取平台私有 API；BaaS 只开放明确的 runtime API。
-6. 预览域先用 5 分钟单次 claim token 换取该预览 host 的短期 HttpOnly cookie，随即移除 URL 中的 token；nginx 通过 `auth_request` 向 VibeHub 校验每次预览请求。
+6. 每个 preview host 固定把 `GET /_claim?t=...` 反代给 VibeHub。API compare-and-set 消费 5 分钟单次 token，校验 token 绑定的 subject、preview key 和 version 后，由**该 preview host 的响应**设置 `__Host-vh_preview`（Secure、HttpOnly、SameSite=Lax、Path=/、无 Domain）的 1 小时签名 grant，再 303 到不含 token 的 `/`。`/_claim` 禁用 query access log并返回 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`。
 7. 预览响应加 `X-Robots-Tag: noindex, nofollow`；未登录访客不能访问。
+
+除 `/_claim` 外，preview server 的所有请求先走 nginx `auth_request`。VibeHub 同时校验 cookie 签名、grant audience 是否等于当前 Host、preview 是否 active、grant subject 是否仍有该 project/activity 权限；通过后才让 nginx 读取静态文件。`hub.supermind-ai.cn` 不尝试给兄弟域设置 cookie。
+
+80 端口只对上述 allowlist Host 重定向到 HTTPS；unknown Host 的 default server 直接关闭连接，不使用未经校验的 `$host` 拼接 Location。works/preview vhost 设置 `autoindex off`、`X-Content-Type-Options: nosniff`，不挂 PHP/CGI/脚本 handler；preview 额外设置 `Referrer-Policy: no-referrer`。证书续期失败进入告警。
 
 ### nginx 配置复杂度如何控制
 
@@ -175,7 +181,7 @@ P1 的 BaaS 只提供以下受控积木：
 
 原因：
 
-- 当前是单机、一个 API 进程和一个低并发 worker；两者会建立不同数据库连接，但写事务很短且允许排队。100～300 个项目的数据量小，SQLite 能减少安装、备份和运维面。
+- 当前是单机、一个 API 进程和一个低并发 worker。API 是 SQLite 的唯一访问者；worker 通过本机 Unix socket 领任务和回报结果，不直接打开数据库。100～300 个项目的数据量小，SQLite 能减少安装、备份和运维面。
 - 业务需要事务：邀请码兑换、版本完成、审核通过、正式版本指针和审计事件必须原子更新；JSON/JSONL 文件不适合作为关系事实源。
 - SQLite 官方认为低到中等流量网站和应用服务器内的本地数据适用；WAL 允许读写并行，但同一时刻仍只有一个 writer，因此本方案要求短事务、单部署 worker 和 `busy_timeout`。[Appropriate Uses For SQLite](https://www.sqlite.org/whentouse.html)；[SQLite WAL](https://www.sqlite.org/wal.html)
 
@@ -205,7 +211,7 @@ Project ──< RuntimeAsset / AIUsageDaily
 - 时间统一保存 UTC ISO-8601 `TEXT`；金额、token 数、字节数使用 `INTEGER`。
 - 外键默认 `ON DELETE RESTRICT`。用户、活动、项目、域名采用 `status`/`archived_at` 软停用，不做级联物理删除。
 - `PRAGMA foreign_keys=ON`、WAL、合理 `busy_timeout`；所有写事务保持短小，不在事务内做网络、解压、AI 或部署。
-- API 与 worker 都可能写库，但 SQLite 同时只放行一个 writer：两者统一设置 5 秒 `busy_timeout`，对可重试的 busy 使用带抖动退避；worker 只在“领取 job”和“提交结果”时开短事务。定时被动 checkpoint，并监控 WAL 大小和 busy 计数。
+- API 内部使用串行写队列和短事务；worker 的 lease、心跳和结果都由 API 代写。API 设置 5 秒 `busy_timeout`，对可重试的 busy 使用带抖动退避；定时被动 checkpoint，并监控 WAL 大小和 busy 计数。
 - 状态分维度保存，不在 `projects` 上塞一个万能 `status`。项目页面的“已发布且有新版本待审”等状态由版本、部署、审核和域名指针组合推导。
 - JSON 字段只保存低查询频率的配置、证据和展示信息；高频过滤条件必须拆成列和索引。
 
@@ -216,48 +222,62 @@ Project ──< RuntimeAsset / AIUsageDaily
 | 表 | 关键字段 | 主键、外键与索引 |
 |---|---|---|
 | `users` | `id`, `display_name`, `public_name`, `email_enc?`, `status`, `created_at`, `updated_at` | `PK(id)`；`INDEX(status)`；未成年人默认只公开 `public_name`，PII 可空且加密 |
-| `webauthn_credentials` | `id`, `user_id`, `credential_id`, `public_key`, `sign_count`, `transports_json`, `created_at`, `last_used_at?`, `revoked_at?` | `PK(id)`；`FK(user_id→users)`；`UQ(credential_id)`；`INDEX(user_id,revoked_at)`；P0 用于管理员 passkey |
-| `web_sessions` | `id`, `user_id`, `secret_hash`, `auth_level`, `created_at`, `last_seen_at`, `expires_at`, `revoked_at?` | `PK(id)`；`FK(user_id→users)`；`UQ(secret_hash)`；`INDEX(user_id,expires_at)`；浏览器只持随机明文 cookie |
-| `one_time_tokens` | `id`, `purpose(handshake/preview_claim/dashboard_exchange/recovery)`, `subject_id`, `resource_type`, `resource_id`, `secret_hash`, `expires_at`, `used_at?`, `created_at` | `PK(id)`；`UQ(secret_hash)`；`INDEX(purpose,subject_id,expires_at)`；只存 hash，成功消费使用 compare-and-set |
-| `activities` | `id`, `kind(course/room/collection/hackathon)`, `slug`, `name`, `description`, `cover_asset_ref?`, `visibility`, `public_profile_policy_json`, `status`, `created_by`, `starts_at?`, `ends_at?` | `PK(id)`；`FK(created_by→users.id)`；`UQ(slug)`；`INDEX(status,starts_at)`；`cover_asset_ref` 是对象存储引用，不是外键 |
+| `webauthn_credentials` | `id`, `user_id`, `credential_id`, `public_key`, `sign_count`, `transports_json`, `created_at`, `last_used_at?`, `revoked_at?` | `PK(id)`；`FK(user_id→users.id)`；`UQ(credential_id)`；`INDEX(user_id,revoked_at)`；P0 用于 operator/admin/teacher/reviewer 等 staff passkey |
+| `web_sessions` | `id`, `user_id`, `secret_hash`, `auth_level`, `created_at`, `last_seen_at`, `expires_at`, `revoked_at?` | `PK(id)`；`FK(user_id→users.id)`；`UQ(secret_hash)`；`INDEX(user_id,expires_at)`；浏览器只持随机明文 cookie |
+| `one_time_tokens` | `id`, `purpose(admin_bootstrap/handshake/device_binding/preview_claim/dashboard_exchange/recovery)`, `subject_id`, `resource_type`, `resource_id`, `secret_hash`, `expires_at`, `used_at?`, `created_at` | `PK(id)`；`UQ(secret_hash)`；`INDEX(purpose,subject_id,expires_at)`；subject/resource 是按 purpose 校验的多态引用，应用服务与触发器验证目标类型及作用域；只存 hash，成功消费使用 compare-and-set |
+| `platform_roles` | `user_id`, `role(operator)`, `status`, `created_at` | `PK(user_id,role)`；`FK(user_id→users.id)`；只允许极少 operator 创建 activity 并指定首位 activity admin，不继承任意 activity 的内容权限 |
+| `activities` | `id`, `kind(course/room/collection/hackathon)`, `slug`, `name`, `description`, `cover_asset_ref?`, `visibility`, `public_profile_policy_json`, `runtime_policy_json?`, `status`, `created_by`, `starts_at?`, `ends_at?` | `PK(id)`；`FK(created_by→users.id)`；`UQ(slug)`；`INDEX(status,starts_at)`；`cover_asset_ref` 是对象存储引用，不是外键；P1 的 `runtime_policy_json` 保存活动级配额上限/熔断开关，不存实时用量 |
 | `activity_memberships` | `activity_id`, `user_id`, `role(student/teacher/admin/reviewer)`, `status`, `joined_at` | `PK(activity_id,user_id,role)`；`FK(activity_id→activities.id)`；`FK(user_id→users.id)`；`INDEX(user_id,status)`、`INDEX(activity_id,role,status)` |
-| `invitation_codes` | `id`, `activity_id`, `code_hash`, `code_hint`, `intended_user_id?`, `reserved_project_id?`, `grant_role`, `max_redemptions`, `redemption_count`, `expires_at`, `revoked_at?`, `created_by`, `created_at` | `PK(id)`；`FK(activity_id→activities.id)`；`FK(intended_user_id→users.id)`；`FK(reserved_project_id→projects.id)`；`FK(created_by→users.id)`；`UQ(code_hash)`；`INDEX(activity_id,expires_at,revoked_at)` |
-| `invitation_redemptions` | `id`, `invitation_id`, `user_id`, `project_id?`, `skill_connection_id?`, `redeemed_at`, `request_fingerprint_hash?` | `PK(id)`；`FK(invitation_id→invitation_codes.id)`；`FK(user_id→users.id)`；`FK(project_id→projects.id)`；`FK(skill_connection_id→skill_connections.id)`；`UQ(invitation_id,user_id,project_id)`；`INDEX(user_id,redeemed_at)` |
-| `projects` | `id`, `activity_id`, `name`, `slug`, `description`, `category?`, `cover_asset_ref?`, `status(active/disabled/archived)`, `created_by`, `created_at`, `updated_at` | `PK(id)`；`FK(activity_id→activities.id)`；`FK(created_by→users.id)`；`UQ(slug)` 保证正式 host 和公开 API 全局无歧义；`INDEX(activity_id,status,updated_at)`；`cover_asset_ref` 不是外键 |
+| `invitation_codes` | `id`, `activity_id`, `code_hash`, `code_hint`, `intended_user_id?`, `reserved_project_id NOT NULL`, `grant_role`, `max_redemptions`, `redemption_count`, `expires_at`, `revoked_at?`, `created_by`, `created_at` | `PK(id)`；`FK(activity_id→activities.id)`；`FK(intended_user_id→users.id)`；`FK(reserved_project_id→projects.id)`；`FK(created_by→users.id)`；`UQ(code_hash)`；`INDEX(activity_id,expires_at,revoked_at)`；触发器保证 reserved project 属于同一 activity |
+| `invitation_redemptions` | `id`, `invitation_id`, `user_id`, `project_id NOT NULL`, `skill_connection_id NOT NULL`, `redeemed_at`, `request_fingerprint_hash?` | `PK(id)`；`FK(invitation_id→invitation_codes.id)`；`FK(user_id→users.id)`；`FK(project_id→projects.id)`；`FK(skill_connection_id→skill_connections.id)`；`UQ(invitation_id)` 保证 P0 一码只兑换一次；`UQ(skill_connection_id)`；`INDEX(user_id,redeemed_at)`；触发器校验 user/project/connection 与邀请码预留对象一致 |
+| `projects` | `id`, `activity_id`, `name`, `slug`, `description`, `category?`, `cover_asset_ref?`, `status(active/archived)`, `created_by`, `created_at`, `updated_at` | `PK(id)`；`FK(activity_id→activities.id)`；`FK(created_by→users.id)`；`UQ(slug)` 保证正式 host 和公开 API 全局无歧义；`INDEX(activity_id,status,updated_at)`；`cover_asset_ref` 不是外键；是否对外服务由 domain serving state 决定 |
 | `project_members` | `project_id`, `user_id`, `role(owner/editor/viewer)`, `status`, `joined_at` | `PK(project_id,user_id)`；`FK(project_id→projects.id)`；`FK(user_id→users.id)`；`INDEX(user_id,status)` |
-| `domains` | `id`, `project_id`, `kind(subdomain/path/custom)`, `host`, `path_prefix NOT NULL DEFAULT ''`, `is_primary`, `status(pending/active/disabled)`, `tls_status`, `release_generation`, `desired_published_version_id?`, `current_published_version_id?`, `created_at`, `updated_at` | `PK(id)`；`FK(project_id→projects.id)`；两个复合 `FK(project_id,desired/current_published_version_id→versions.project_id,id)` 保证版本属于同一项目；`UQ(host,path_prefix)`；部分唯一索引保证每项目仅一个 `is_primary=1`；`INDEX(project_id,status)` |
-| `versions` | `id`, `project_id`, `seq_no`, `label?`, `created_by`, `source_sha256?`, `source_ref?`, `artifact_sha256`, `artifact_ref`, `artifact_bytes`, `entrypoint`, `manifest_json`, `changelog?`, `submission_status(uploading/submitted/invalid)`, `created_at`, `submitted_at?` | `PK(id)`；`FK(project_id→projects.id)`；`FK(created_by→users.id)`；`UQ(project_id,id)` 支持同项目复合外键；`UQ(project_id,seq_no)`；`UQ(project_id,artifact_sha256)` 可用于幂等；`INDEX(project_id,created_at DESC)` |
-| `deployment_records`（部署记录） | `id`, `version_id`, `domain_id?`, `environment(preview/production)`, `attempt_no`, `status(queued/running/succeeded/failed/cancelled/obsolete)`, `target_key`, `url?`, `artifact_sha256`, `expected_generation?`, `publish_phase?`, `previous_version_id?`, `requested_by`, `job_id`, `created_at`, `started_at?`, `finished_at?`, `error_code?`, `redacted_error?` | `PK(id)`；`FK(version_id→versions.id)`；`FK(domain_id→domains.id)`；`FK(previous_version_id→versions.id)`；`FK(requested_by→users.id)`；`FK(job_id→jobs.id)`；`UQ(version_id,environment,attempt_no)`；`INDEX(status,created_at)`、`INDEX(domain_id,expected_generation)`、`INDEX(version_id,environment,finished_at)` |
+| `domains` | `id`, `project_id`, `kind(subdomain/path/custom)`, `host`, `path_prefix NOT NULL DEFAULT ''`, `is_primary`, `status(pending/active/disabled)`, `desired_serving_state(active/disabled)`, `tls_status`, `release_generation`, `desired_published_version_id?`, `current_published_version_id?`, `created_at`, `updated_at` | `PK(id)`；`FK(project_id→projects.id)`；两个复合 `FK(project_id,desired/current_published_version_id→versions.project_id,id)` 保证版本属于同一项目；`UQ(host,path_prefix)`；部分唯一索引保证每项目仅一个 `is_primary=1`；`INDEX(project_id,status)` |
+| `versions` | `id`, `project_id`, `client_submission_id`, `seq_no`, `label?`, `created_by`, `source_sha256?`, `source_ref?`, `artifact_sha256`, `artifact_ref`, `artifact_bytes`, `entrypoint`, `manifest_json`, `changelog?`, `submission_status(uploading/submitted/invalid)`, `created_at`, `submitted_at?` | `PK(id)`；`FK(project_id→projects.id)`；`FK(created_by→users.id)`；`UQ(project_id,id)` 支持同项目复合外键；`UQ(project_id,client_submission_id)` 负责提交幂等；`UQ(project_id,seq_no)`；`INDEX(project_id,artifact_sha256)` 只用于查重，不把相同产物折成同一版本；`INDEX(project_id,created_at DESC)` |
+| `previews` | `id`, `version_id`, `preview_key`, `status(active/revoked/expired)`, `created_at`, `expires_at?`, `revoked_at?` | `PK(id)`；`FK(version_id→versions.id)`；`UQ(preview_key)`；key 为 128-bit 随机值的 Base32 表示，创建后不复用；部分 `UQ(version_id) WHERE status='active'` |
+| `deployment_records`（部署记录） | `id`, `version_id`, `preview_id?`, `domain_id?`, `environment(preview/production)`, `attempt_no`, `status(queued/running/succeeded/failed/cancelled/obsolete)`, `target_key`, `url?`, `artifact_sha256`, `expected_generation?`, `publish_phase?`, `previous_version_id?`, `requested_by`, `job_id`, `created_at`, `started_at?`, `finished_at?`, `error_code?`, `redacted_error?` | `PK(id)`；`FK(version_id→versions.id)`；`FK(preview_id→previews.id)`；`FK(domain_id→domains.id)`；`FK(previous_version_id→versions.id)`；`FK(requested_by→users.id)`；`FK(job_id→jobs.id)`；preview 记录必须有 `preview_id`、不得有 domain/generation，且 preview 与 version 相同；production 记录必须有 domain/generation、不得有 preview，且 version/domain/previous version 均属同一 project（由复合索引 + 触发器强制）；`UQ(version_id,environment,attempt_no)`；`INDEX(status,created_at)`、`INDEX(domain_id,expected_generation)`、`INDEX(version_id,environment,finished_at)` |
 | `review_requests` | `id`, `project_id`, `version_id`, `activity_id`, `status(pending/approved/rejected/cancelled/superseded)`, `requested_by`, `requested_at`, `decided_at?` | `PK(id)`；复合 `FK(project_id,version_id→versions.project_id,id)`；`FK(activity_id→activities.id)`；`FK(requested_by→users.id)`；部分 `UQ(project_id) WHERE status='pending'`；`INDEX(activity_id,status,requested_at)`；触发器校验 project 属于同一 activity |
-| `review_records` | `id`, `review_request_id`, `reviewer_id`, `decision(submitted/approved/rejected/commented/reopened/superseded)`, `comment?`, `checklist_json?`, `diagnostic_report_id?`, `created_at` | `PK(id)`；`FK(review_request_id→review_requests.id)`；`FK(reviewer_id→users.id)`；`FK(diagnostic_report_id→diagnostic_reports.id)`；触发器要求引用报告与 review request 指向同一 version；`INDEX(review_request_id,created_at)`、`INDEX(reviewer_id,created_at)`；只追加、不覆盖 |
+| `review_records` | `id`, `review_request_id`, `reviewer_id`, `decision(submitted/approved/rejected/commented/cancelled/superseded)`, `comment?`, `checklist_json?`, `diagnostic_report_id?`, `created_at` | `PK(id)`；`FK(review_request_id→review_requests.id)`；`FK(reviewer_id→users.id)`；`FK(diagnostic_report_id→diagnostic_reports.id)`；触发器要求引用报告与 review request 指向同一 version；`INDEX(review_request_id,created_at)`、`INDEX(reviewer_id,created_at)`；只追加、不覆盖；重新送审必须新建 request，不复活旧记录 |
 | `diagnostic_policies` | `id`, `name`, `version`, `template_kind`, `checks_json`, `created_at`, `retired_at?` | `PK(id)`；`UQ(name,version)`；评分规则版本化后不可修改 |
 | `diagnostic_reports`（AI 诊断报告） | `id`, `version_id`, `deployment_id NOT NULL`, `policy_id`, `analyzer_version`, `evidence_sha256`, `status(queued/running/succeeded/failed)`, `health_percent?`, `readiness_status`, `summary?`, `input_tokens`, `output_tokens`, `estimated_cost_micros`, `started_at?`, `finished_at?` | `PK(id)`；`FK(version_id→versions.id)`；`FK(deployment_id→deployment_records.id)`；`FK(policy_id→diagnostic_policies.id)`；触发器要求 deployment 属于同一 version 且 environment=preview；`UQ(version_id,policy_id,analyzer_version,evidence_sha256)`；`INDEX(version_id,finished_at DESC)` |
 | `diagnostic_items` | `id`, `report_id`, `check_key`, `dimension`, `title`, `applicability(applicable/not_applicable)`, `result(pass/partial/fail/unknown)`, `severity`, `earned_points`, `max_points`, `evidence_level(verified/client_reported/ai_inferred/human_required)`, `evidence_json`, `explanation`, `next_action?`, `is_blocker` | `PK(id)`；`FK(report_id→diagnostic_reports.id)`；`UQ(report_id,check_key)`；`CHECK(applicable⇒max_points>0 且 0≤earned_points≤max_points)`；`CHECK(not_applicable⇒earned_points=max_points=0 且 is_blocker=0)`；`CHECK(is_blocker=1⇒result≠pass)`；`INDEX(report_id,dimension)`、`INDEX(report_id,is_blocker)` |
 | `skill_connections` | `id`, `user_id`, `project_id`, `activity_id`, `client_kind(claude/codex/workbuddy/other)`, `device_name`, `status`, `scope_json`, `token_family_id`, `last_seen_at?`, `expires_at`, `revoked_at?`, `created_at` | `PK(id)`；`FK(user_id→users.id)`；`FK(project_id→projects.id)`；`FK(activity_id→activities.id)`；`INDEX(user_id,status)`、`INDEX(project_id,status)`；触发器校验 project 属于 activity；默认每用户每项目最多 3 个 active connection |
 | `skill_refresh_tokens` | `id`, `connection_id`, `token_hash`, `parent_token_id?`, `issued_at`, `expires_at`, `used_at?`, `revoked_at?`, `replaced_by_id?` | `PK(id)`；`FK(connection_id→skill_connections.id)`；`FK(parent_token_id→skill_refresh_tokens.id)`；`FK(replaced_by_id→skill_refresh_tokens.id)`；`UQ(token_hash)`；`INDEX(connection_id,expires_at)`；轮换重放时撤销整条 token family |
-| `jobs` | `id`, `kind(deploy/diagnose/publish/cleanup/analytics_sync)`, `resource_type`, `resource_id`, `dedupe_key`, `requested_by_type`, `requested_by_id`, `status`, `priority`, `progress_json?`, `result_ref?`, `attempts`, `available_at`, `lease_owner?`, `lease_expires_at?`, `last_error_code?`, `created_at`, `finished_at?` | `PK(id)`；`INDEX(status,priority,available_at)`；部分 `UQ(kind,dedupe_key) WHERE status IN ('queued','running')` 防 active 重复，历史 succeeded/failed 可并存；`requested_by_id` 是按 type 校验的多态主体 |
+| `jobs` | `id`, `kind(deploy/diagnose/publish/disable/cleanup/analytics_sync/webhook)`, `resource_type`, `resource_id`, `dedupe_key`, `requested_by_type`, `requested_by_id`, `status(queued/running/succeeded/failed/cancelled/obsolete)`, `priority`, `progress_json?`, `result_ref?`, `attempts`, `available_at`, `lease_owner?`, `lease_expires_at?`, `last_error_code?`, `created_at`, `finished_at?` | `PK(id)`；`INDEX(status,priority,available_at)`；部分 `UQ(kind,dedupe_key) WHERE status IN ('queued','running')` 防 active 重复，历史 succeeded/failed 可并存；`requested_by_id` 是按 type 校验的多态主体 |
 | `idempotency_keys` | `principal_id`, `action`, `key`, `request_hash`, `response_status`, `response_body_ref`, `expires_at`, `created_at` | `PK(principal_id,action,key)`；`INDEX(expires_at)`；同一 submission 的 initiate/complete/deploy 使用不同 action 或派生 key |
 | `audit_events` | `id`, `activity_id?`, `actor_type`, `actor_id?`, `action`, `resource_type`, `resource_id`, `request_id`, `ip_hash?`, `details_json`, `created_at` | `PK(id)`；`INDEX(resource_type,resource_id,created_at)`、`INDEX(activity_id,created_at)`；只追加 |
+| `abuse_reports` | `id`, `project_id`, `version_id`, `category`, `description`, `reporter_contact_enc?`, `evidence_json?`, `status(new/triaged/actioned/rejected)`, `assigned_to?`, `resolution?`, `created_at`, `updated_at`, `resolved_at?` | `PK(id)`；复合 `FK(project_id,version_id→versions.project_id,id)`；`FK(assigned_to→users.id)`；`INDEX(status,created_at)`、`INDEX(project_id,created_at)`；处置动作另写 audit event |
 
 ### P1 BaaS 扩展表
 
 | 表 | 关键字段 | 主键、外键与索引 |
 |---|---|---|
-| `runtime_collections` | `id`, `project_id`, `name`, `schema_json`, `read_policy`, `write_policy`, `max_records`, `max_record_bytes`, `status`, `created_at` | `PK(id)`；`FK(project_id→projects.id)`；`UQ(project_id,name)` |
+| `runtime_project_quotas` | `project_id`, `max_collections`, `max_total_records`, `max_record_bytes`, `max_asset_bytes`, `max_daily_upload_bytes`, `max_daily_ai_requests`, `max_daily_ai_tokens`, `max_daily_ai_cost_micros`, `updated_by`, `updated_at` | `PK(project_id)`；`FK(project_id→projects.id)`；`FK(updated_by→users.id)`；写入时不得超过所属 activity 的 `runtime_policy_json` 上限 |
+| `runtime_collections` | `id`, `project_id`, `name`, `schema_version`, `schema_json`, `read_policy`, `write_policy`, `max_records`, `max_record_bytes`, `status`, `created_at`, `updated_at` | `PK(id)`；`FK(project_id→projects.id)`；`UQ(project_id,name)`；`UQ(project_id,id)`；破坏性 schema 变更新建版本/迁移，不直接让旧记录失效 |
 | `runtime_records` | `id`, `collection_id`, `owner_subject?`, `payload_json`, `row_version`, `created_at`, `updated_at` | `PK(id)`；`FK(collection_id→runtime_collections.id)`；`INDEX(collection_id,created_at)`、`INDEX(collection_id,owner_subject)`；单条 payload 有硬上限 |
 | `runtime_assets` | `id`, `project_id`, `workspace_id`, `provider`, `provider_object_id`, `sha256`, `mime`, `bytes`, `status`, `public_url?`, `created_by_subject`, `created_at` | `PK(id)`；`FK(project_id→projects.id)`；`UQ(provider,provider_object_id)`；`INDEX(project_id,created_at)` |
 | `runtime_sessions` | `id`, `project_id`, `subject_kind(anonymous)`, `subject_id_hash`, `audience`, `origin`, `expires_at`, `revoked_at?`, `created_at` | `PK(id)`；`FK(project_id→projects.id)`；`INDEX(project_id,expires_at)`；token 同时绑定 project、audience 和规范化 origin |
+| `runtime_usage_daily` | `project_id`, `usage_date`, `records_written`, `upload_bytes`, `asset_egress_bytes`, `blocked_count` | `PK(project_id,usage_date)`；`FK(project_id→projects.id)`；用于数据/文件配额的事务计数 |
 | `ai_usage_daily` | `project_id`, `usage_date`, `model_alias`, `request_count`, `input_tokens`, `output_tokens`, `cost_micros`, `blocked_count` | `PK(project_id,usage_date,model_alias)`；`FK(project_id→projects.id)`；用于配额和成本，不保存提示词正文 |
+| `webhook_subscriptions` | `id`, `activity_id`, `url_enc`, `secret_enc`, `secret_hint`, `event_types_json`, `status`, `created_by`, `created_at`, `revoked_at?` | `PK(id)`；`FK(activity_id→activities.id)`；`FK(created_by→users.id)`；`INDEX(activity_id,status)`；签名 secret 由平台密钥加密保存、原文只展示一次；只允许 HTTPS 和经过 SSRF 校验的目标 |
+| `webhook_deliveries` | `id`, `subscription_id`, `event_id`, `event_type`, `payload_ref`, `payload_sha256`, `status(queued/running/succeeded/dead)`, `attempts`, `next_attempt_at?`, `last_http_status?`, `last_error_code?`, `created_at`, `delivered_at?` | `PK(id)`；`FK(subscription_id→webhook_subscriptions.id)`；`UQ(subscription_id,event_id)`；`INDEX(status,next_attempt_at)`；payload 按版本化 schema 生成 |
+
+### 状态机与跨租户约束
+
+- `versions` 只允许 `uploading → submitted | invalid`；`submitted/invalid` 是终态，不能覆盖产物。重试创建新 version 或复用尚未完成的同一 `client_submission_id`。
+- `review_requests` 只允许 `pending → approved | rejected | cancelled | superseded`；所有终态不可改。重新送审必须新建 request；新版本成功形成预览时，以事务把该项目旧 pending 置为 superseded 并追加记录。
+- `jobs` 与 `deployment_records` 只允许 `queued → running → succeeded | failed | cancelled | obsolete`；终态不可改。lease 超时仅由 API compare-and-set 重新领取**同一行**并增加 attempts，不能另建一个与其争抢的 active job。
+- 所有迁移都使用预期旧状态的 compare-and-set 并追加 `audit_events`；数据库 trigger 拒绝非法迁移。外键只证明“行存在”，上表另列的复合外键/trigger 还必须证明 version、project、activity、domain 和 preview 属于同一租户链。
 
 ### 正式发布的一致性
 
 审核通过不直接改当前正式指针。数据库事务和文件系统 rename 无法形成一个真正的跨介质原子事务，因此使用 **单项目发布代次 + durable intent + 启动对账**：
 
-1. 审批事务 compare-and-set `review_requests=pending`，并检查目标 `seq_no` 严格高于 current 和 desired；较旧版本只能走显式 rollback，不能作为普通待审版本后来居上。随后追加 `review_records=approved`，把该域名的 `release_generation` 加 1，写 `desired_published_version_id`，并创建带同一 `expected_generation` 的 production deployment/job。
-2. worker 对项目取得文件锁，校验版本已批准、产物哈希正确，而且 DB 中 generation 和 desired version 仍匹配。旧 job 若落后于新审批，标记 `obsolete`，不能覆盖新版本。
-3. worker 把版本放进只读目录，`fsync` 后原子写入 `release-intent.json`，内容为 domain、generation、desired、previous、artifact hash；再创建候选 symlink。
-4. worker 在切换前再次比较 generation，然后用同一文件系统内的原子 `rename` 切换 `current`，并把 `publish_phase` 记为 `switched`。
-5. 短事务更新 `domains.current_published_version_id`、production deployment `succeeded`，但只在 generation 仍匹配时成功；随后原子写 `release-committed.json`。
+1. 所有会增加 generation 的 approve、rollback、disable 先取得同一个 per-project `flock`。持锁期间，审批事务 compare-and-set `review_requests=pending`，并检查目标 `seq_no` 严格高于 current 和 desired；较旧版本只能走显式 rollback，不能作为普通待审版本后来居上。随后追加 `review_records=approved`，把该域名的 `release_generation` 加 1，写 `desired_published_version_id`，并创建带同一 `expected_generation` 的 production deployment/job，提交后释放锁。
+2. worker 经权限受限的本机 Unix socket 向 API 领取 lease；API 在短事务中校验版本已批准、产物哈希正确，而且 generation 和 desired version 仍匹配。旧 job 若落后于新审批，由 API 标记 `obsolete`，不能覆盖新版本。worker 自己不读数据库。
+3. worker 把版本放进只读目录，`fsync` 后原子写入 `release-intent.json`，内容为 `action=publish|rollback`、domain、generation、desired、previous、artifact hash；再创建候选 symlink。disable 使用同一格式但 `action=disable`，不要求新的 version。
+4. worker 在切换前取得同一个 per-project `flock`，持锁通过 Unix socket 请求 commit authorization；API 再次比较 generation。其他审批在这段时间无法增加 generation。授权成功后 worker 用同一文件系统内的原子 `rename` 切换 `current`。
+5. worker 通过 nginx loopback + 正式 Host + cache-busting URL 读取平台生成的 `/.vibehub-release.json`，验证其中 version 和 artifact hash，而不是只看 HTTP 200。失败时仍持锁恢复 previous 并回报 failed；成功时回报 switched，API 短事务更新 `domains.current_published_version_id`、production deployment `succeeded`。worker 收到确认后原子写 `release-committed.json`，最后释放 flock。
 6. 进程启动和定时对账读取 symlink、intent、commit 与 DB：若 intent 对应的版本已审批且仍是 DB desired generation，就完成第 5 步；否则把 symlink 恢复到 previous。任何恢复动作都追加审计。
 
 集合页始终链接稳定作品 URL，所以短暂的 DB 指针更新延迟不会生成坏链接；崩溃窗口中即使已经切换，能出现的也只能是已审核且仍为 desired 的版本。旧正式产物至少保留一版，可通过新 generation 原子回滚。
@@ -287,11 +307,22 @@ SQLite schema 使用标准 SQL、显式迁移和 repository 层，避免依赖�
 
 ### 明确推荐
 
-推荐一个版本化 REST API：`/api/v1`。所有写操作返回统一 operation/job 状态，Skill 写接口支持 `Idempotency-Key`；权限按“用户在当前 activity/project 中的角色”判断，不使用全局 `isAdmin` 代替资源授权。
+推荐三套稳定根路径：平台 Web、管理和公开 API 使用 `/api/v1`，Skill 使用 `/skill/v1`，作品运行时使用 `/runtime/v1`。下文 Staff、学员、管理、公开四张表中的 `/auth`、`/projects`、`/admin`、`/public` 都是相对 `/api/v1` 的路径；Skill/Runtime 表项写完整根路径。preview host 的 `/_claim` 是唯一不在这三套根路径内的特殊交换路由。所有写操作返回统一 operation/job 状态，Skill 写接口支持 `Idempotency-Key`；权限按“用户在当前 activity/project 中的角色”判断，不使用全局 `isAdmin` 代替资源授权。
 
 Web 会话使用 `Secure + HttpOnly + SameSite=Lax` 的 host-only cookie；所有非 GET Web 写请求校验 CSRF token。Skill 使用 Bearer access token。公开 API 无登录，但必须限流；BaaS runtime 使用短期 runtime session 和项目策略。
 
-管理员数量很少且平台已有 HTTPS 前置条件，P0 推荐使用 **WebAuthn/passkey + 离线恢复码**，不引入邮件验证码服务。管理员由受信任运维命令预建，首次注册 passkey；恢复码只显示一次、服务端只存 hash。`POST /auth/admin/passkey/options` 与 `POST /auth/admin/passkey/verify` 创建管理员 Web session；审核、回滚、下架和邀请码批量生成等敏感动作要求最近 10 分钟内重新验证 passkey。放弃共享 `ADMIN_TOKEN` 和多人共用密码，因为无法实名审计和单人撤销。
+staff 数量很少且平台已有 HTTPS 前置条件，P0 推荐让 **operator、admin、teacher、reviewer 全部使用 WebAuthn/passkey + 离线恢复码**，不引入邮件验证码服务。首位 operator 由受信任的本机运维命令预建；后续 staff 由有权管理员预建。两种路径都生成一个 10 分钟、一次性的 `admin_bootstrap` code，首次 passkey attestation 必须同时消费该 code，避免预建用户名被抢注。恢复码只显示一次、服务端只存 hash。`POST /auth/admin/passkey/options` 与 `POST /auth/admin/passkey/verify` 创建实名 staff Web session；审核、回滚、下架和邀请码批量生成等敏感动作要求最近 10 分钟内重新验证 passkey。放弃共享 `ADMIN_TOKEN` 和多人共用密码，因为无法实名审计和单人撤销。
+
+### Staff 认证 API
+
+| 方法与端点 | 用途 | 鉴权 |
+|---|---|---|
+| `POST /auth/admin/passkey/options` | 获取登录或首次登记 challenge | 未登录；强限流；首次登记还需一次性 bootstrap code |
+| `POST /auth/admin/passkey/verify` | 验证 passkey 并创建管理员 Web session | WebAuthn assertion/attestation |
+| `POST /auth/admin/reauth/options` | 敏感操作前获取新 challenge | 管理员 Web session |
+| `POST /auth/admin/reauth/verify` | 把 session 的 recent-auth 窗口更新为 10 分钟 | 管理员 Web session + WebAuthn |
+| `POST /auth/admin/recovery` | 丢失设备时消费一个离线恢复码，并强制登记新 passkey | 一次性恢复码；强限流；全量审计 |
+| `POST /auth/logout` | 注销当前 session | Web session + CSRF |
 
 ### 学员端 API
 
@@ -309,30 +340,49 @@ Web 会话使用 `Secure + HttpOnly + SameSite=Lax` 的 host-only cookie；所�
 | `GET /versions/:versionId/diagnostics/latest` | 该版本最新诊断，不自动返回其他版本报告 | 项目成员 |
 | `POST /versions/:versionId/diagnostics` | 主动重新诊断 | 项目成员；限频 |
 | `POST /versions/:versionId/preview-claims` | 获取一次性预览 claim URL | 项目成员 |
-| `GET /projects/:projectId/analytics/summary` | 基础浏览量和更新时间 | 项目成员 |
+| `POST /projects/:projectId/device-binding-codes` | 为第二台 AI 工具生成 10 分钟单次绑定码 | 项目 owner Web session + CSRF |
+| `GET /projects/:projectId/analytics/summary` | P1 基础浏览量和更新时间 | 项目成员 |
+| `GET /projects/:projectId/runtime/collections` | P1 查看 collection schema、策略和用量 | 项目 owner/editor、同活动 teacher/admin |
+| `POST /projects/:projectId/runtime/collections` | P1 创建受限 collection | 项目 owner、同活动 teacher/admin + CSRF + 配额 |
+| `PATCH /projects/:projectId/runtime/collections/:name` | P1 修改 schema/策略；破坏性 schema 变更必须新版本或迁移 | 项目 owner、同活动 teacher/admin + CSRF + ETag |
+| `GET /projects/:projectId/runtime/collections/:name/records` | P1 在 hub 分页查看项目数据 | 项目 owner/editor、同活动 teacher/admin |
+| `DELETE /projects/:projectId/runtime/collections/:name/records/:recordId` | P1 人工清理单条滥用/测试数据 | 项目 owner、同活动 teacher/admin + CSRF + 审计 |
+| `GET /projects/:projectId/runtime/assets` | P1 查看文件台账和配额使用 | 项目 owner/editor、同活动 teacher/admin |
 | `GET /activities/:activityId/published-projects` | 浏览同活动已公开作品 | 活动成员；结果仍只含公开字段 |
 
 ### 管理端 API
 
 | 方法与端点 | 用途 | 鉴权 |
 |---|---|---|
-| `POST /admin/activities`、`PATCH /admin/activities/:id` | 创建/配置活动和集合页 | activity admin |
-| `POST /admin/activities/:id/invitations` | 批量生成预绑定邀请码 | activity admin |
+| `POST /admin/activities` | 创建活动并把创建者设为首位 activity admin | platform operator + recent passkey |
+| `PATCH /admin/activities/:id` | 配置活动和集合页 | activity admin |
+| `POST /admin/activities/:id/invitations` | 批量生成预绑定邀请码 | activity admin + recent passkey + CSRF |
 | `GET /admin/activities/:id/invitations` | 查看状态和 code hint，不回显原码 | activity admin |
-| `POST /admin/invitations/:id/revoke` | 吊销未用邀请码或相关连接 | activity admin + CSRF |
+| `POST /admin/invitations/:id/revoke` | 吊销未用邀请码或相关连接 | activity admin + recent passkey + CSRF |
 | `GET /admin/activities/:id/members` | 参与者和绑定状态 | teacher/admin |
+| `POST /admin/activities/:id/staff` | 新增 teacher/reviewer/admin membership，并返回一次性 passkey bootstrap code | activity admin + recent passkey + CSRF |
+| `POST /admin/activities/:id/staff/:userId/revoke` | 撤销 staff membership 和相关 session | activity admin + recent passkey + CSRF；不能撤销最后一位 admin |
 | `POST /admin/activities/:id/projects` | 预建项目、slug 和作品入口 | activity admin |
-| `PATCH /admin/projects/:id` | 修改展示元数据、停用项目 | teacher/admin |
-| `POST /admin/projects/:id/domains` | 分配/验证入口；P0 只允许平台子域名 | activity admin |
+| `PATCH /admin/projects/:id` | 修改展示元数据或归档管理对象；不得改变线上 serving state | teacher/admin；线上下架必须走专用 disable |
+| `POST /admin/projects/:id/device-binding-codes` | 学员无法登录看板时由管理员生成设备绑定码 | activity admin + recent passkey |
+| `POST /admin/projects/:id/domains` | 分配/验证入口；P0 只允许平台子域名 | activity admin + recent passkey + CSRF |
 | `GET /admin/activities/:id/review-queue` | 待审列表 | reviewer/teacher/admin |
 | `GET /admin/reviews/:reviewId` | 预览、版本差异、诊断证据、历史正式版 | reviewer/teacher/admin |
-| `POST /admin/reviews/:reviewId/approve` | 审核通过并创建 publish job | reviewer/teacher/admin + CSRF + Idempotency-Key |
+| `POST /admin/versions/:id/preview-claims` | 老师/审核员获取绑定本人和该版本的单次预览 claim | 同活动 reviewer/teacher/admin |
+| `POST /admin/reviews/:reviewId/approve` | 审核通过并创建 publish job；诊断缺失/失败时必须提交 `diagnostic_override_reason` | reviewer/teacher/admin + recent passkey + CSRF + Idempotency-Key；override 同时写 review record 与 audit |
 | `POST /admin/reviews/:reviewId/reject` | 驳回并写反馈 | reviewer/teacher/admin + CSRF |
 | `POST /admin/reviews/:reviewId/comment` | 不改变决定的反馈 | reviewer/teacher/admin |
-| `POST /admin/projects/:id/rollback` | 回滚到一个已审核的历史正式版 | activity admin；必须写原因 |
-| `POST /admin/projects/:id/disable` | 紧急下架 | activity admin；追加审计 |
+| `POST /admin/projects/:id/rollback` | 回滚到一个已审核的历史正式版 | activity admin + recent passkey + CSRF；必须写原因 |
+| `POST /admin/projects/:id/disable` | 紧急下架 | activity admin + recent passkey + CSRF；追加审计 |
+| `GET /admin/projects/:id/runtime-quotas` | P1 查看数据、文件、AI 的 hard/used 配额 | teacher/admin |
+| `PATCH /admin/projects/:id/runtime-quotas` | P1 调整项目配额但不得超过活动上限 | activity admin + recent passkey + CSRF + ETag |
+| `POST /admin/activities/:id/webhooks` | P1 创建签名 webhook subscription | activity admin + recent passkey + CSRF；目标先做 SSRF 校验 |
+| `POST /admin/webhooks/:id/rotate-secret` | P1 轮换 webhook 签名 secret | activity admin + recent passkey + CSRF |
+| `POST /admin/webhooks/:id/revoke` | P1 停止后续投递 | activity admin + recent passkey + CSRF |
+| `GET /admin/abuse-reports` | 查看本活动举报队列 | teacher/admin |
+| `POST /admin/abuse-reports/:id/resolve` | 记录处置；必要时触发高优先级下架 | activity admin + recent passkey + CSRF |
 | `POST /admin/versions/:id/diagnostics` | 审核前重跑诊断 | reviewer/teacher/admin；限频 |
-| `GET /admin/activities/:id/analytics` | 活动和项目基础运营摘要 | teacher/admin |
+| `GET /admin/activities/:id/analytics` | P1 活动和项目基础运营摘要 | teacher/admin |
 | `GET /admin/audit-events` | 审核、发布、吊销和回滚审计 | activity admin；按作用域过滤 |
 
 审批接口必须检查：预览部署成功、目标版本仍属于该项目、审核请求仍 pending、操作者仍有当前活动权限。诊断可以提示风险，但不能代替老师审批，也不能自动发布。
@@ -359,6 +409,8 @@ Web 会话使用 `Secure + HttpOnly + SameSite=Lax` 的 host-only cookie；所�
 |---|---|---|
 | `POST /skill/v1/handshakes` | 校验邀请码并创建 10 分钟待确认握手 | 邀请码；强限流 |
 | `POST /skill/v1/handshakes/:id/confirm` | 原子兑换邀请码、绑定用户/项目/设备并发凭证 | 单次 handshake secret |
+| `POST /skill/v1/device-handshakes` | 用看板/管理员生成的设备绑定码创建待确认握手，不重复兑换邀请码 | 10 分钟单次设备绑定码；强限流 |
+| `POST /skill/v1/device-handshakes/:id/confirm` | 确认第二设备并签发独立 token family | 单次 handshake secret |
 | `POST /skill/v1/token` | 用 refresh token 换 15 分钟 access token | 轮换式 refresh token |
 | `POST /skill/v1/connections/:id/revoke` | 学员撤销当前设备 | access token |
 | `GET /skill/v1/context` | 当前课程、项目、作品地址、scope | access token |
@@ -377,6 +429,7 @@ Web 会话使用 `Secure + HttpOnly + SameSite=Lax` 的 host-only cookie；所�
 - 所有资源查询先做 scope 检查，防止 IDOR；日志只记 token ID/连接 ID，不记邀请码或 refresh token 明文。
 - 版本提交、部署、审批和发布都要幂等；相同 Idempotency-Key 但请求体不同返回冲突。
 - `ETag`/`row_version` 用于管理端并发编辑；审批采用事务内 compare-and-set，避免两位老师重复决定。
+- P1 webhook 使用版本化 envelope（`event_id/type/occurred_at/activity_id/data`）和 `HMAC-SHA256(timestamp + "." + raw_body)`；按 `subscription + event` 至少一次投递，指数退避后进死信，接收方用 `event_id` 去重。投递 worker 拒绝 localhost、link-local、私网、云元数据地址并在每次重定向后重新解析，防止 SSRF。
 
 ### 放弃的选项及原因
 
@@ -425,7 +478,7 @@ sequenceDiagram
     H->>H: 本地构建、测试、secret scan、生成 manifest 与哈希
     H->>P: initiate（manifest + Idempotency-Key）
     P-->>H: 一次性上传会话
-    H->>P: 上传私有源码快照与静态产物
+    H->>P: 上传静态产物与证据 manifest（P1 可选私有源码快照）
     H->>P: complete（哈希/大小）
     H->>P: 创建 preview deployment
     P->>W: durable job
@@ -449,6 +502,7 @@ P0 明确采用：
 | 凭证 | 用途 | 生命周期 | 存储与撤销 |
 |---|---|---|---|
 | 邀请码 | 首次 enrollment | 默认 7 天、一次使用 | 服务端只存 hash；管理员可撤销 |
+| 设备绑定码 | 已绑定学员增加一台 AI 工具 | 10 分钟、一次使用 | 由 owner 看板或管理员生成；只授予同一项目；不增加成员权限 |
 | handshake secret | 防误绑确认 | 10 分钟、一次使用 | 只在 helper 内存；确认后作废 |
 | access token | Skill API 调用 | 15 分钟 | 签名 token，包含 `sub/connection/project/activity/scopes/jti/kid`；不落 DB 明文 |
 | refresh token | 换 access token | 30 天闲置过期、90 天绝对过期 | 256 bit 随机值；本地 Keychain；服务端只存 hash；每次使用轮换 |
@@ -466,9 +520,7 @@ helper 在本地完成：
 1. 检测静态入口和构建命令；P0 不接受后端类型。
 2. 在干净临时目录构建，记录命令、退出码、依赖锁哈希和测试结果。
 3. 排除 `.git`、`.env*`、私钥、凭证目录、`node_modules` 和超大文件；运行 secret scan。
-4. 生成两个不可变包：
-   - 私有源码快照：供诊断，永不由 nginx 公开。
-   - 静态产物：只含允许的站点文件和 manifest。
+4. P0 生成一个不可变静态产物和独立证据 manifest，只含允许的站点文件、哈希和本地检查结果。P1 若深度诊断确实需要源码，再经学员明确确认生成私有源码快照；它永不由 nginx 公开，并执行独立保留期。
 5. 计算 SHA-256、文件数、解压后总大小和入口文件。
 6. initiate → upload → complete → deploy 共享同一个 client submission ID；每一步使用按 action 分域的幂等键（例如 `submission-id:initiate`、`:complete`、`:deploy`），避免不同请求体互相冲突。
 
@@ -506,7 +558,7 @@ helper 在本地完成：
 
 每份报告必须绑定：
 
-- `version_id`、源码 SHA-256、产物 SHA-256、预览 `deployment_id`。
+- `version_id`、产物 SHA-256、证据 manifest SHA-256、预览 `deployment_id`；P1 若用户选择上传私有源码快照，再额外绑定源码 SHA-256。
 - 诊断 policy 版本、analyzer 版本、模板类型。
 - 文件树摘要、入口、依赖锁哈希、构建/测试命令及退出码。
 - secret scan、危险文件、超大文件、绝对路径和归档安全检查。
@@ -516,7 +568,9 @@ helper 在本地完成：
 - 与上一版本的结构化差异。
 - 证据来源：`verified`、`client_reported`、`ai_inferred`、`human_required`。
 
-源代码正文默认不整包发送给 LLM。先用确定性工具提取短证据、相关片段和错误；发送前删除 secret、PII、绝对本机路径和无关文件。报告保留证据哈希和必要的脱敏片段。
+P1 即使存在私有源码快照，也默认不把源代码正文整包发送给 LLM。先用确定性工具提取短证据、相关片段和错误；发送前删除 secret、PII、绝对本机路径和无关文件。报告保留证据哈希和必要的脱敏片段。
+
+模型调用把所有源码、错误和页面文本视为**不可信数据**：模型无工具、无网络、不能读取其他租户数据；证据放入明确的 data delimiters，system 指令要求忽略其中命令；输出必须通过严格 JSON Schema 并只引用已有 `check_key`。建议不得直接生成执行 shell、删除数据或处理密钥的操作。解析、引用或安全校验失败时丢弃 LLM 叙事，保留 checker 的事实、分数和“解释暂不可用”，不重写确定性结果。
 
 ### 百分比如何被诊断项完全解释
 
@@ -602,16 +656,20 @@ flowchart TB
     N -->|hub.supermind-ai.cn| APP[VibeHub Web + REST API<br/>Node.js/TypeScript, PM2 fork]
     APP --> DB[(SQLite WAL)]
     APP --> Q[(jobs 表)]
-    Q --> WORKER[单部署/诊断 worker<br/>低权限用户]
+    APP --> IPC[权限受限 Unix socket<br/>lease / authorize / result]
+    IPC --> WORKER[单部署/诊断 worker<br/>低权限用户、无 DB 权限]
+    SUP[本机 supervisor<br/>心跳/硬超时] --> WORKER
+    SUP --> EMERGENCY[窄权限 disable helper<br/>仅可切固定下架页]
 
     N -->|*.works.supermind-ai.cn| PUB[正式静态目录<br/>只读、每项目独立 origin]
     N -->|*.preview.supermind-ai.cn<br/>auth_request| PRE[不可变预览目录<br/>短期 cookie + noindex]
 
     WORKER --> PUB
     WORKER --> PRE
+    EMERGENCY --> PUB
     APP --> UP[上传平台 / 腾讯 COS、VOD]
     APP --> AI[受控模型 Provider]
-    PUB --> UMAMI[自托管 Umami]
+    PUB --> UMAMI[自托管 Umami，P1]
 
     RUNNER[独立诊断 runner，P1] -.仅收脱敏任务和一次性产物.-> APP
     RUNNER -.与生产机密钥/内网隔离.-> PRE
@@ -621,7 +679,7 @@ flowchart TB
 
 - `vibe-deploy`、上传平台、Workbench、VibeLoop 多数是 Node 资产，复用协议、脚本和工程经验的摩擦最小。
 - 平台规模不需要微服务；课程、邀请码、项目、版本、部署、审核、诊断、集合页应在一个事务边界内。
-- 一个 Web/API 进程和一个 fork-mode worker 足够；不用 PM2 cluster，避免增加并发写连接。API 与 worker 的 SQLite 写入仍由 WAL/锁串行，必须遵守第 3 节的短事务和 busy retry 规则。
+- 一个 Web/API 进程和一个 fork-mode worker 承担正常业务；不用 PM2 cluster。API 内部串行写 SQLite；worker 不打开 DB，只通过 Unix socket 请求 lease、切换前授权和结果提交。supervisor/disable helper 只是本机故障保险，不承载业务 API、不读 DB，也不能发布学员版本。
 - 模块边界仍需清楚：`identity`、`activities`、`projects`、`submissions`、`deployments`、`reviews`、`diagnostics`、`public-catalog`、`runtime-baas`、`integrations`。模块通过应用服务和事件接口连接，不跨模块直接改表。
 
 AI 游戏营中台的 FastAPI 骨架不作为 VibeHub 主服务底座：它的模型、部署和 tutor 路由在 README 中仍为 stub。可在 `integrations/ai-provider` 复用其模型别名和安全/配额思想，待实现成熟后再通过内部 API 接入。
@@ -649,8 +707,9 @@ AI 游戏营中台的 FastAPI 骨架不作为 VibeHub 主服务底座：它的�
 - nginx 用户对静态目录只读；`project-slug` 和 `preview-key` 都由平台生成、严格校验且创建后不可复用。
 - 8080 的 legacy server 对 `/vibehub` 和任何 `/srv/vibehub` 映射都显式 deny/不存在；预览只能经过 443 的 preview wildcard + `auth_request`。
 - API 进程无 nginx 配置写权限、无 root、无学生产物执行权限。
-- worker 使用独立低权限用户，只能写 VibeHub 自己的 staging、preview、published 目录；平台初始化时一次性配置固定 wildcard nginx，不允许 worker动态写 `/etc/nginx`。
-- 源码快照和旧产物优先放私有 COS；生产机只保留运行所需版本。
+- worker 使用独立低权限用户，只能写 VibeHub 自己的 staging、preview、published 目录和 Unix socket；不能读取 SQLite、WAL/SHM、平台环境变量或 Provider 密钥。平台初始化时一次性配置固定 wildcard nginx，不允许 worker 动态写 `/etc/nginx`。
+- supervisor 只管理 worker PID、心跳和超时；emergency helper 的只读配置硬编码唯一目标 `system/disabled/`，调用参数只接受受严格格式校验的内部 project ID，并用 AppArmor/文件 ACL 限制到 `published/*/current` 与 intent 目录。每次仍需 API 对最新 generation 做一次性授权，不能传入或选择任意源目录。
+- P1 的可选源码快照和旧产物优先放私有 COS；生产机只保留运行所需版本。
 - 数据库、refresh token hash、模型密钥、COS 凭证和 DNS 凭证不进入仓库，不进入学生产物，不传给诊断模型。
 
 ### 平台、正式作品和预览的隔离
@@ -670,6 +729,8 @@ AI 游戏营中台的 FastAPI 骨架不作为 VibeHub 主服务底座：它的�
 | 恶意归档 | Zip Slip、绝对路径、symlink/hardlink、设备文件、压缩炸弹覆盖宿主文件 | 随机 staging；只接受白名单格式；拒绝 `..`、绝对路径、链接和特殊文件；限制压缩包、展开后字节、文件数、单文件大小和路径长度；先校验后原子移动 |
 | 源码/产物带密钥 | `.env`、私钥、上游 API key 被公开 | helper 排除 + secret scan；服务端复检；命中即 quarantine 并提示轮换；平台永不把 Provider key 注入产物 |
 | 学员 JS 攻击平台 | XSS、读平台 cookie、调用管理 API | `hub`、`works`、`preview` 分 origin；平台 cookie host-only；CORS 默认拒绝；公开作品不代理到平台同源路径 |
+| 管理端点击劫持 | 学员作品 iframe 已登录 hub，诱导老师点击审核/下架 | 仅 hub 响应设置 CSP `frame-ancestors 'none'; form-action 'self'`、`X-Frame-Options: DENY` 和最小 `Permissions-Policy`；敏感动作 recent passkey + CSRF；不把这套严格 CSP 强加给作品域 |
+| 管理端存储型 XSS | 项目名、说明、changelog、审核评论、举报内容或 AI 摘要含恶意 HTML/URL | 模板统一上下文输出编码；Markdown 使用固定白名单净化并禁止原始 HTML、危险 URL scheme 和事件属性；hub 采用 nonce/hash 型严格 `script-src` 且不含 `unsafe-inline/eval`；AI 文本同样只当数据渲染 |
 | 预览泄露 | 未审核内容被搜索引擎或链接转发访问 | 单次 claim 换短期 cookie；`auth_request`；`noindex`；访问审计；不在公开 API 和集合页返回预览 URL |
 | 越权/IDOR | 改 URL 访问他人项目、版本或诊断 | 每次查询按 membership + project scope 鉴权；不可猜 ID 只是辅助手段；自动化授权矩阵测试 |
 | 邀请码/凭证泄露 | 冒名绑定、持续提交、越权发布 | 高熵一次性邀请码；短 access；refresh 轮换与重放检测；设备级撤销；学生凭证永无 publish/admin scope |
@@ -692,9 +753,9 @@ OWASP 建议上传系统使用扩展名白名单、不能信任 Content-Type、�
 4. 老师批准后创建 production job；只有 worker 能切换 `current`。
 5. 切换后探活正式 URL，再更新发布记录；失败自动回旧 symlink。
 6. 驳回只写审核记录，不触碰 `current`。
-7. 紧急下架同样获取项目锁并增加 `release_generation`，把 `current` 原子切到平台只读的 `system/disabled/` 页面，再把域名状态设为 disabled；不能只改 DB 后假设直读磁盘的 nginx 会自动下架。原版本保留在受限目录，重新启用必须创建新的 publish generation。
+7. 紧急下架复用同一恢复协议和 per-project flock：API 持锁在事务中增加 `release_generation`、写 `desired_serving_state=disabled`，创建最高优先级 disable job；worker 取得同一锁并写入 `action=disable` 的 durable intent 后，把 `current` 原子切到平台只读的 `system/disabled/` 页面，再由 API 把域名状态提交为 disabled。部署各阶段有硬超时（解包 120 秒、切换与 sentinel 探活各 15 秒）和 10 秒心跳；disable 等待超过 30 秒时 supervisor 终止失联/超时 worker 以释放 flock，并启动一个**只能把指定 project 切到固定 disabled 页面**的窄权限 emergency helper。它仍需向 API 校验最新 disabled generation、写 intent 和审计，不能发布任意版本。P0 目标是下架请求 120 秒内生效并告警。启动对账看到 desired disabled 时必须 fail-closed 完成下架，不能按旧 desired version 恢复上线。原版本保留在受限目录，重新启用必须创建新的 `action=publish|rollback` generation。
 
-SQLite 每日做在线一致性备份并加密复制到机外；发布目录按哈希和 DB 元数据可重建。每月至少做一次恢复演练，验证数据库、当前版本指针和作品目录能共同恢复。监控入口、job 分支、异常和返回值；关键指标包括部署成功率、队列时长、审核积压、磁盘、SQLite busy、token 刷新重放、预览拒绝和 BaaS 配额拦截。
+SQLite 每日用 SQLite Backup API（或等价的 WAL-safe 在线备份命令）生成一致快照，不直接复制正在写入的 `.db`；快照立即执行 `PRAGMA integrity_check`，再加密并复制到异机。备份加密密钥与备份文件分开保管，恢复演练同时验证解密、schema migration、WAL 一致性和哈希。发布目录按哈希和 DB 元数据可重建。每月至少做一次恢复演练，验证数据库、当前版本指针和作品目录能共同恢复。监控入口、job 分支、异常和返回值；关键指标包括部署成功率、队列时长、审核积压、磁盘、SQLite busy、token 刷新重放、预览拒绝和 BaaS 配额拦截。
 
 ### 放弃的选项及原因
 
@@ -722,7 +783,9 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
   → 集合页与个人看板可见
 ```
 
-这条链上缺任何一环，都可能让未审核内容公开、让作品无法上线或让老师无法处置，因此属于 P0。通用 BaaS、完整 AI 叙事诊断、团队协作和任意后端不是开营最短闭环。
+这条链上缺任何一环，都可能让未审核内容公开、让作品无法上线或让老师无法处置，因此属于 P0。通用 BaaS、完整 AI 叙事诊断、团队协作和任意后端不是**静态课程**开营的最短闭环。
+
+本分期的硬前提是：首期课程把可交付作品限定为静态站，普通图片随 20 MiB 产物提交，不要求运行时数据、上传或 AI。如果课程负责人验证后确认首期核心作业必须使用任一运行时能力，则当前 P0 不成立；必须把该能力对应的最小 BaaS、管理面、配额与滥用测试从 P1 提升为开营阻塞项，通过验收后才能开营，不能先以“临时公开 key”绕过。
 
 ### P0：不做就开不了营
 
@@ -739,7 +802,7 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
    - Claude Code、Codex、WorkBuddy 共用 helper。
    - 邀请码握手、短 access、轮换 refresh、设备撤销。
 4. **静态版本提交**
-   - 学员端构建；源码与产物分包；哈希、大小、secret scan。
+   - 学员端构建；只提交静态产物与 evidence manifest；哈希、大小、secret scan。可选私有源码快照属于 P1。
    - 服务端安全解包、不可变版本、幂等提交和串行部署。
 5. **预览、审核、发布**
    - 受保护版本预览。
@@ -752,8 +815,8 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
 7. **最小诊断**
    - 不调用 LLM 也能生成版本绑定的确定性诊断：产物/入口、预览 HTTP、静态资源、secret、大小和人工检查项。
    - 如果 UI 展示百分比，必须使用第 6 节的 points 公式；客户端证据必须标注来源。
-8. **基础运营和运维**
-   - 对接现有 Umami 的作品浏览量；若 API 自动建站待验证，至少先完成集合页和正式作品脚本的受控接入。
+8. **基础运维**
+   - P0 学员看板显示正式 URL、二维码和版本时间；运营统计块隐藏或明确标“尚未启用”，不伪造浏览量。Umami 自动接入属于 P1。
    - 数据库机外备份、恢复演练、磁盘配额和告警、结构化脱敏日志、job 重启恢复。
    - 未成年人公开署名、内容审核、举报和下架流程。
 
@@ -766,24 +829,34 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
 3. A 提交 v1：本地构建成功，平台生成不可变、未公开的预览；未登录访客访问预览得到 401/403，搜索引擎收到 noindex。
 4. 老师批准 v1 后，正式子域名可通过 HTTPS 访问，集合页出现该作品，学员看板显示 v1 为线上版本。
 5. A 提交 v2 后，正式域名仍显示 v1；老师驳回 v2 后仍显示 v1，集合页不出现 v2。
-6. A 提交 v3 并获批后，正式域名原子切换到 v3；执行回滚后恢复 v1，审核、发布和回滚审计完整。
-7. 管理端以老师身份能看本活动队列，不能审核无权限活动；学生永远没有 approve/publish scope。
+6. A 先后提交两个新预览时，较早的 pending request 原子变为 superseded；终态 request 不能被改回 pending。
+7. A 提交 v3 并获批后，正式域名原子切换到 v3；执行回滚后恢复 v1，审核、发布和回滚审计完整。
+8. 管理端以老师身份能看本活动队列，不能审核无权限活动；学生永远没有 approve/publish scope。
 
-**安全与可靠性**
+**身份、边界与内容处置**
 
-8. 包含 `../`、绝对路径、symlink、超量文件、超量展开字节、`.env`/私钥特征的测试包全部被拒绝或隔离，不写出 staging。
-9. 正式作品页面无法读取 `hub` 的会话 cookie，平台私有 API 的跨域请求被拒绝。
-10. 相同 Idempotency-Key 的重复提交只产生一个版本/部署；两个老师同时审批只有一个决定成功。
-11. worker 在部署中被杀后，重启能从 durable job 恢复或安全失败；不会留下“数据库显示发布但目录不存在”的状态。
-12. 备份恢复到空目录后，能恢复活动、用户、项目、审核记录、正式版本指针和一个可访问作品。
-13. 磁盘达到 80% 时停止接收新站点包但保持正式作品可读；达到阈值有明确告警。
+9. 首次绑定后，A 能从看板生成 10 分钟单次码绑定第二设备；刷新凭证每次轮换，重放旧 refresh 会撤销整个 family；撤销一台设备后该连接的写请求立即或最迟在 15 分钟 access 到期时失败，另一设备不受影响。
+10. 包含 `../`、绝对路径、symlink、超量文件、超量展开字节、`.env`/私钥特征的测试包全部被拒绝或隔离，不写出 staging。
+11. 正式作品页面无法读取 `hub` 的会话 cookie，平台私有 API 的跨域请求被拒绝；hub 不能被作品 iframe，敏感动作同时要求 CSRF 与 recent passkey。把恶意 HTML、`javascript:` URL 和事件属性分别放入项目名、评论、举报与伪造 AI 摘要后，管理端只显示净化文本且 CSP 无违规脚本执行。
+12. 只公开学员别名。一次公开举报可进入本活动队列，老师完成 triage，管理员可触发高优先级 disable；集合页和正式域随后不可访问作品，处置和下架都有实名审计。
+13. 使用合成邀请码、access、refresh、preview claim 和错误包跑完整链路后，结构化应用日志、nginx access/error log 与审计详情均找不到这些明文秘密或未脱敏源码片段。
+
+**网络、发布与恢复**
+
+14. `hub`、works wildcard、preview wildcard 均在 443 使用有效证书；80 只对 allowlist Host 301 到对应 HTTPS，unknown Host 被 default server 拒绝。用证书客户端 staging/dry-run 完成一次续期演练，并验证失败会告警。
+15. legacy 8080 无法通过 `/vibehub`、项目 slug、preview key 或 version ID 访问 VibeHub 正式/预览目录；不存在任何 `/srv/vibehub` 映射。
+16. 相同 principal、action 与 Idempotency-Key 的重试只产生一个对应资源；同 key 换请求体返回冲突；两个老师同时审批只有一个 compare-and-set 成功。
+17. worker 分别在写 intent、切 symlink、探活、回报 API 处被杀；重启对账均能完成目标 generation 或恢复 previous，不会留下“DB 显示发布但 sentinel 不匹配”。过期 lease 重领同一 job，旧 generation job 变 obsolete 且不能覆盖新版本。让 worker 故意卡住后发起 disable，supervisor/emergency helper 能在 120 秒内完成下架且不能借该 helper 发布其他目录。
+18. 用 WAL 写入并发场景产生备份，验证快照通过 integrity check；把加密备份恢复到空目录后，能恢复活动、用户、项目、审核记录、正式版本指针和一个 sentinel 匹配的可访问作品。
+19. 磁盘达到 80% 时停止接收新站点包但保持正式作品可读；达到 70/80/90% 均有预期告警或处置，清理任务不删除 current/previous/pending 所需产物。
 
 **诊断与容量**
 
-14. 任一诊断百分比都能由下方 `earned/max` 精确复算；报告显示 version、artifact hash、policy version 和生成时间。
-15. 新版本诊断中时，旧报告明确标“上一版本”，不会作为当前版本结论。
-16. 使用 300 项目、每项目 3 个版本的合成元数据运行列表、审核和集合查询；索引查询无全表扫描热点。
-17. 5 个并发提交能被限流/排队且不串项目；部署 worker 保持单写。静态和 API 的具体 p95 目标在同机压测后落基线，不能凭本方案编造。
+20. P0 诊断逐项验证：入口存在、预览 HTTP 可达、引用的核心静态资源无 4xx/5xx、Content-Type 合理、未发现 secret/危险文件、产物大小合规；核心用户路径未自动验证时显示 `human_required`，不能假装通过。
+21. 任一诊断百分比都能由下方 `earned/max` 精确复算；报告显示 version、artifact hash、policy version 和生成时间。构造所有项均不适用的 policy 时分数为 `NULL`，UI 显示“暂无法计算”，不显示 0%/100%。
+22. 新版本诊断中时，旧报告明确标“上一版本”，不会作为当前版本结论；审核 override 只针对当前 version 并进入审计。
+23. 使用 300 项目、每项目 3 个版本的合成元数据运行列表、审核和集合查询；索引查询无全表扫描热点。
+24. 5 个并发提交能被限流/排队且不串项目；worker 无法直接打开 SQLite，所有状态写入由 API 串行提交。静态和 API 的具体 p95 目标在同机压测后落基线，不能凭本方案编造。
 
 ### P1：把“静态作品”升级为“可做动态产品”
 
@@ -791,9 +864,9 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
 
 - 受限数据 BaaS：collection schema、public read、anonymous append、配额和项目成员在 hub 的管理端数据查看；作品终端用户账号/登录推迟到有真实需求后另立方案。
 - 文件 BaaS：复用上传平台 `project workspace` 与 VOD/COS Provider；补私有对象、一次性上传、内容类型和配额。
-- AI BaaS：模型别名、未成年人安全过滤、项目/IP/设备配额、成本台账；不向作品下发上游 key。
+- AI BaaS：模型别名、未成年人安全过滤、单请求上限、并发限制、项目日硬预算、活动/全局熔断、项目/IP/设备配额、Provider 账单告警和成本台账；不向作品下发上游 key。
 - 完整 AI 诊断：确定性证据 + LLM 小白解释 + 版本差异；独立 runner 执行有限 Playwright 核心路径。
-- 团队项目、多设备自助批准、模板/starter 导入。
+- 团队项目、设备清单与批量吊销 UI、模板/starter 导入。
 - Umami 自动建站、项目/活动统计同步和简单趋势。
 - 事件 webhook，供 Workbench 作为可选的人机反馈界面；webhook 要有签名、delivery ID、重试和死信。
 
@@ -824,7 +897,7 @@ SQLite 每日做在线一致性备份并加密复制到机外；发布目录按�
 
 这套方案刻意把“学员创作自由”放在浏览器与平台受控接口里，而不是放在生产机 shell 里。它牺牲了首期任意后端自由，换来三项更重要的能力：
 
-1. 100～300 个作品可以在 2 vCPU 单机上稳定共存。
+1. 100～300 个静态作品在 2 vCPU 单机上具有可行的容量设计目标；是否稳定必须以第 8 节的同机压测、磁盘和故障验收结果为准。
 2. 未审核版本、正式版本和平台控制面有可验证的安全边界。
 3. 一名主力工程师能够理解、备份、恢复和处置整套系统。
 

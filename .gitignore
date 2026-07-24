@@ -46,3 +46,7 @@ Thumbs.db
 
 # 抓取的原型 bundle（体积大且是他人构建产物，按需本地保留）
 docs/research/prototype/bundle/
+
+# 前端构建
+web/dist/
+web/node_modules/
