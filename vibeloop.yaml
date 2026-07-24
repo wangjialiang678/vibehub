@@ -1,0 +1,108 @@
+# VibeHub 项目宣言（VibeLoop）
+#
+# 状态：预置。按〔决策 6〕的推荐（分阶段），P0 阶段**只用 Vibe Workbench 做决策与评审**，
+# 暂不启动 user-vibeloop 自动闭环。等产品跑通、verify 真正硬起来之后再开。
+#
+# 为什么现在就写：宣言是意图的唯一权威来源，早写早对齐；而且它零成本——
+# 不启动 serve 就不会有任何自动行为。
+
+project: VibeHub
+
+goal: >
+  让零基础学员用自己习惯的 AI 工具做出的作品，能被一句命令部署成一个公开可访问的网址，
+  并在老师审核通过后自动汇入课程作品集合页；老师能一眼看出全班进度、逐个预览待发布版本、
+  并对每个版本获得可解释的 AI 诊断作为参考。
+
+metrics:
+  - 学员从输入邀请码到拿到第一个预览地址的时间不超过 5 分钟
+  - 老师审核一个版本（打开→预览→决定）的操作不超过 3 次点击
+  - 发布切换过程中访客不会遇到 404
+  - AI 诊断的百分比可被逐项复算，每一分都能指回一条证据
+  - 每修复一个 bug 应新增对应回归断言（测试面单调变宽）
+
+constraints:
+  - 服务端绝不执行学员的构建脚本或学员编写的后端进程
+  - 老师审核是正式发布的唯一闸门，AI 诊断不得自动放行任何版本
+  - 版本快照落盘后不可变；新版本被驳回时线上旧版本必须继续可访问
+  - 诊断分数由确定性检查器计算，模型不得修改 points / is_blocker / evidence_level
+  - 不适用的诊断项不计入百分比分母，不得记为 0 分
+  - 不引入 UI 组件库（会破坏原型的手写 CSS 设计语言）
+  - 不引入 Kubernetes、微服务拆分或消息队列
+  - 任何运行时数据（数据库、版本产物、上传文件、邀请码明码）不得进入代码仓库
+  - 面向学员的错误信息一律为中文人话并给出下一步提示
+
+# 意图分层：这些文档是产品意图本身，改动等同于改产品定义
+specs:
+  - 产品需求文档.md
+  - docs/specs/PRD.md
+  - docs/specs/architecture.md
+  - docs/specs/domain-model.md
+  - docs/specs/api.md
+
+# 评估 harness。当前项目尚未开始编码，verify 只能是占位。
+# ⚠️ 在 verify 真正覆盖核心行为之前，所有 gates 保持 human——
+#    "你的自动化置信度上限，就是 verify 命令的严格程度"。
+verify:
+  - name: 单元与集成测试
+    run: npm test
+    required: true
+  - name: 类型检查
+    run: npm run typecheck
+    required: true
+  - name: 文档链接与 frontmatter 校验
+    run: npm run lint:docs
+    required: false
+
+mainBranch: main
+
+riskTiers:
+  high:
+    - vibeloop.yaml
+    - 产品需求文档.md
+    - docs/specs/**
+    - "**/auth/**"
+    - "**/unpack/**"          # 安全解包，直接面对不可信输入
+    - "**/publish/**"         # 发布切换，出错会让访客看到 404
+    - "**/diagnosis/policy/**" # 诊断评分 policy，改它等于改产品承诺
+    - infra/**
+  low:
+    - docs/research/**
+    - README.md
+    - "**/*.css"
+
+# 编码尚未开始、verify 尚未成型 → 全部人审。
+# 等 P0 跑通且测试覆盖核心链路后，再把 low 放开为 auto。
+gates:
+  low: human
+  medium: human
+  high: human
+
+agents:
+  triage: codex
+  fixer: codex
+  judge: codex
+
+# 顾问系统：乐乐老师定义了产品形态，产品/交互类判断指派给他
+consultants:
+  - id: lele
+    domains: [product, ux, content]
+  - id: michael
+    domains: [architecture, security, ops, business]
+
+routing:
+  product: lele
+  ux: lele
+  content: lele
+  architecture: michael
+  security: michael
+  ops: michael
+  business: michael
+
+# 网页项目：合并前给真实可访问的 URL，而不是只给 diff 摘要
+preview: evidence
+
+sla:
+  decisionHours: 48
+
+notify:
+  mode: log

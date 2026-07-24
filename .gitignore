@@ -1,0 +1,48 @@
+# 依赖与构建
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# 环境与密钥（只允许提交 *.example.*）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials.json
+config.local.*
+server-vault.env
+api-vault.env
+
+# 运行时数据（绝不入库）
+data/
+var/
+versions/
+sites/
+previews/
+uploads/
+tmp/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.jsonl
+
+# VibeLoop 运行数据
+.vibeloop/
+
+# 日志
+*.log
+logs/
+
+# 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# 抓取的原型 bundle（体积大且是他人构建产物，按需本地保留）
+docs/research/prototype/bundle/
