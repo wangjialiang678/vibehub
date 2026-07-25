@@ -127,6 +127,18 @@ test('base 是运行时算的，同一份产物在预览和正式两个路径下
   assert.match(html, /location\.pathname/);
 });
 
+test('大写属性名 / 等号空格的绝对引用也会被改写成相对路径（与诊断采集正则一致）', () => {
+  const d = tmp();
+  // 包内确实有 main.css，但首页用大写 HREF 写绝对路径。若不改写，运行时会请求域名根 /main.css → 404，
+  // 而诊断看包内有同名文件误判「不缺失」。改写正则必须大小写不敏感且允许 = 两侧空格。
+  writeFileSync(join(d, 'main.css'), 'body{}');
+  writeFileSync(join(d, 'index.html'), '<link HREF = "/main.css"><script SRC="/main.css"></script>');
+  rewriteAbsolutePaths(d, '/vibehub/u/p/');
+  const html = readFileSync(join(d, 'index.html'), 'utf8');
+  assert.doesNotMatch(html, /["']\/main\.css["']/, '不应残留根绝对路径');
+  assert.match(html, /HREF\s*=\s*["']\.\/main\.css["']/i);
+});
+
 test('指向包外的绝对路径不动它——那可能是有意的外链', () => {
   const d = tmp();
   writeFileSync(join(d, 'index.html'), '<a href="/about">关于</a><img src="https://x.com/a.png">');

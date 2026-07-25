@@ -51,4 +51,14 @@ describe('老师端 P0 功能', () => {
     expect(source).toContain('最近动态');
     expect(source).toContain("to={`/admin/projects/${item.id}`}");
   });
+
+  it('shows verification coverage beside development completeness to students and reviewers', () => {
+    const student = readSource('./pages/StudentPage.tsx');
+    const review = readSource('./pages/AdminPage.tsx');
+
+    expect(student).toContain('验证覆盖率');
+    expect(student).toContain('开发完成度');
+    expect(review).toContain('title="开发完成度"');
+    expect(review).toContain('验证覆盖率');
+  });
 });

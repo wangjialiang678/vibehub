@@ -1,6 +1,7 @@
 import { db } from '../lib/db.js';
 import { worksUrl, previewUrl } from '../lib/config.js';
 import { projectDiskUsage } from '../services/storage.js';
+import { calculateDiagnosisMetrics } from '../services/diagnosis.js';
 
 const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
@@ -20,15 +21,26 @@ export function diagnosisView(versionId) {
   const d = db.prepare('SELECT * FROM diagnoses WHERE version_id=? ORDER BY created_at DESC LIMIT 1').get(versionId);
   if (!d) return null;
   const items = j(d.items, []);
+  // 运行中/失败的诊断还没有检查器产出的 items，不能把空分母伪装为 0%。
+  const hasComputedMetrics = ['healthy', 'needs_work', 'blocked'].includes(d.status);
+  const metrics = hasComputedMetrics
+    ? calculateDiagnosisMetrics(items)
+    : {
+        earned: null, max: null,
+        applicable_earned: null, applicable_max: null,
+        applicable_items: null, verified_applicable_items: null,
+        completeness: null, verified_ratio: null,
+      };
   return {
-    id: d.id, version_id: d.version_id, status: d.status, score: d.score,
+    id: d.id, version_id: d.version_id, status: d.status,
+    // score 是旧客户端兼容字段，保持与检查器复算出的完成度完全相同。
+    score: hasComputedMetrics ? metrics.completeness : null,
     policy_version: d.policy_version,
     items,
     facts: j(d.facts, {}),
     model_items: j(d.model_items, []),
-    // 分数可复算：把分母也给出去，前端能自己加一遍
-    applicable_earned: items.filter((i) => i.applicability === 'applicable').reduce((s, i) => s + i.earned_points, 0),
-    applicable_max: items.filter((i) => i.applicability === 'applicable').reduce((s, i) => s + i.max_points, 0),
+    // 两项指标都能从返回的分子/分母确定性复算；score 保留给旧客户端。
+    ...metrics,
     blocked: items.some((i) => i.is_blocker),
     summary: d.summary, next_steps: j(d.next_steps, []),
     finished_at: d.finished_at,
@@ -36,8 +48,10 @@ export function diagnosisView(versionId) {
 }
 
 function latestCompletedDiagnosis(projectId) {
+  // 只回退到「真正算出了结果」的诊断。failed 没有检查器结论，不能当成上一份可展示报告，
+  // 否则新版本诊断中时会被旧的 failed 伪装成「这次诊断失败」，掩盖 v2 正在正常诊断。
   const row = db.prepare(`SELECT d.version_id FROM diagnoses d JOIN versions v ON v.id=d.version_id
-                          WHERE v.project_id=? AND d.status <> 'running'
+                          WHERE v.project_id=? AND d.status IN ('healthy','needs_work','blocked')
                           ORDER BY d.created_at DESC LIMIT 1`).get(projectId);
   return row ? diagnosisView(row.version_id) : null;
 }
@@ -53,11 +67,15 @@ export function projectSnapshot(projectId) {
   const views = db.prepare('SELECT COALESCE(SUM(views),0) AS n FROM page_views WHERE project_id=?').get(projectId);
   const todayViews = db.prepare(`SELECT COALESCE(views,0) AS n FROM page_views WHERE project_id=? AND day=date('now')`).get(projectId);
 
-  const pendingDiagnosis = pending ? diagnosisView(pending.id) : null;
-  const diagnosisRunning = pendingDiagnosis?.status === 'running';
+  // 取「项目最新版本」的诊断，而不是只看 pending。
+  // blocker 版本会被 markBlockedVersion 清空 pending_version_id（退回学员修改），
+  // 若只从 pending/live 取，学员看板就看不到这份 blocked 诊断和修复原因了。
+  const latestVersion = db.prepare('SELECT id FROM versions WHERE project_id=? ORDER BY seq DESC LIMIT 1').get(projectId);
+  const latestVersionDiagnosis = latestVersion ? diagnosisView(latestVersion.id) : null;
+  const diagnosisRunning = latestVersionDiagnosis?.status === 'running';
   const latestDiagnosis = diagnosisRunning
-    ? { ...(latestCompletedDiagnosis(projectId) || pendingDiagnosis), stale: true, pending_version_id: pending.id }
-    : pendingDiagnosis || (live ? diagnosisView(live.id) : null);
+    ? { ...(latestCompletedDiagnosis(projectId) || latestVersionDiagnosis), stale: true, pending_version_id: latestVersion.id }
+    : latestVersionDiagnosis;
 
   return {
     project: {

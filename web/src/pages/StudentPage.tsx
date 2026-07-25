@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { api, readableError } from '../lib/api';
 import { AppShell, ModeTabs } from '../components/Shell';
 import { LoginRequired, PageState, PreviewFrame, StatusPill, copyToClipboard, useQrCode } from '../components/Ui';
-import { evidenceLabel, formatDateTime, formatNumber, getDiagnosisState, getProjectPollInterval, getProjectStatus } from '../lib/presentation';
+import { diagnosisCompleteness, diagnosisEvidenceLabel, formatDateTime, formatDiagnosisPercentage, formatNumber, getDiagnosisState, getProjectPollInterval, getProjectStatus } from '../lib/presentation';
 import { usePageVisibility } from '../lib/pageVisibility';
 import type { DiagnosisItem, ProjectSnapshot } from '../lib/types';
 
@@ -79,13 +79,15 @@ function StatsPanel({ stats }: { stats: ProjectSnapshot['stats'] }) {
 }
 
 function DiagnosisPanel({ diagnosis }: { diagnosis: ProjectSnapshot['latest_diagnosis'] }) {
-  const score = diagnosis?.score;
-  return <article className="panel diagnosis-panel"><div className="diagnosis-top"><PanelKicker kicker="当前界面现状" title="开发完成度" icon="▤" /><strong>{typeof score === 'number' ? `${score}%` : '—'}</strong></div>{!diagnosis ? <div className="inner-empty"><strong>还没有诊断结果</strong><p>提交一个可预览的版本后，系统会在这里列出检查结果。</p></div> : <><div className="diagnosis-list">{diagnosis.items.map((item, index) => <DiagnosisRow key={`${item.check_key || item.label}-${index}`} item={item} />)}</div><div className="diagnosis-summary">●　{diagnosis.summary || '诊断已完成，继续查看每一项检查结果。'}</div></>}</article>;
+  const completeness = diagnosisCompleteness(diagnosis);
+  const blocked = diagnosis?.blocked || diagnosis?.status === 'blocked';
+  const summary = diagnosis?.summary || (diagnosis?.status === 'running' ? '正在诊断，完成后会显示检查结果。' : '诊断已完成，继续查看每一项检查结果。');
+  return <article className="panel diagnosis-panel"><div className="diagnosis-top"><PanelKicker kicker="当前界面现状" title="开发完成度" icon="▤" /><div className="diagnosis-metrics"><strong>{formatDiagnosisPercentage(completeness)}</strong><small>验证覆盖率 {formatDiagnosisPercentage(diagnosis?.verified_ratio)}</small>{diagnosis?.stale && <StatusPill tone="blue">诊断更新中</StatusPill>}{blocked && <StatusPill tone="danger">有阻塞问题</StatusPill>}</div></div>{!diagnosis ? <div className="inner-empty"><strong>还没有诊断结果</strong><p>提交一个可预览的版本后，系统会在这里列出检查结果。</p></div> : <><div className="diagnosis-list">{diagnosis.items.map((item, index) => <DiagnosisRow key={`${item.check_key || item.label}-${index}`} item={item} />)}</div><div className="diagnosis-summary">●　{summary}</div></>}</article>;
 }
 
 function DiagnosisRow({ item }: { item: DiagnosisItem }) {
   const state = getDiagnosisState(item);
-  return <div className={`diagnosis-row${state.muted ? ' is-muted' : ''}`}><div className="diagnosis-label"><DiagnosisIcon checkKey={item.check_key} /><div><b>{item.label || '未命名检查项'}</b><small>{evidenceLabel(item.evidence_level)}</small></div></div><div className="diagnosis-score">{state.ratio && <span className="progress"><i style={{ width: state.ratio }} /></span>}<strong>{state.label}</strong></div></div>;
+  return <div className={`diagnosis-row${state.muted ? ' is-muted' : ''}`}><div className="diagnosis-label"><DiagnosisIcon checkKey={item.check_key} /><div><b>{item.label || '未命名检查项'}</b><small>{diagnosisEvidenceLabel(item)}</small></div></div><div className="diagnosis-score">{state.ratio && <span className="progress"><i style={{ width: state.ratio }} /></span>}<strong>{state.label}</strong></div></div>;
 }
 
 function DiagnosisIcon({ checkKey }: { checkKey?: string }) {

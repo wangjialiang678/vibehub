@@ -4,7 +4,7 @@ import { isSensitiveArtifactPath, listFiles } from './unpack.js';
 import { db, now } from '../lib/db.js';
 import { nanoid } from 'nanoid';
 
-export const POLICY_VERSION = 'p2-2026-07-25';
+export const POLICY_VERSION = 'p3-2026-07-25';
 
 const SECRET_SCAN_CHUNK_BYTES = 64 * 1024;
 const SECRET_SCAN_OVERLAP_BYTES = 128;
@@ -103,14 +103,26 @@ export function collectFacts(versionDir, projectId, { rejected = [] } = {}) {
     if (/\bvibehub\s*\.\s*(save|list|upload|counter|ai)\b/.test(text)) usesSdk = true;
     placeholders += (text.match(/TODO|Lorem ipsum|示例文本|待补充|placeholder/gi) || []).length;
 
-    for (const m of text.matchAll(/(?:href|src)=["']([^"'#][^"']*)["']/g)) {
+    // 大小写不敏感、允许 = 两侧空格：HREF、SRC = "..." 都是合法 HTML，必须一并采集
+    for (const m of text.matchAll(/(?:href|src)\s*=\s*["']([^"'#][^"']*)["']/gi)) {
       const url = m[1];
       if (/^(https?:)?\/\//i.test(url) || url.startsWith('data:') || url.startsWith('mailto:')) continue;
       const clean = url.split('?')[0].split('#')[0].replace(/^\.\//, '');
-      if (!clean || clean.startsWith('/')) continue;
-      const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '';
-      const resolved = normalize(dir + clean);
-      if (resolved && !fileSet.has(resolved) && !resolved.endsWith('/')) {
+      if (!clean || clean.endsWith('/')) continue;
+      let resolved;
+      if (clean.startsWith('/')) {
+        // 根相对路径。作品跑在子目录、运行时注入了 <base>，`/x` 解析到作品根 = 包内的 x。
+        // 解包阶段只会把「包内确实存在」的绝对引用改写成相对路径，仍以 `/` 开头的，
+        // 必然指向包内不存在的文件 → 就是缺失（曾漏掉这类，破损版本能绕过 blocker）。
+        resolved = normalize(clean.slice(1));
+        // 先规范化再判 SDK 前缀，否则 `/vibehub/_sdk/../missing.js` 会用原字符串前缀蒙混过关，
+        // 而浏览器规范化后其实是 `/vibehub/missing.js`（真 404）。只豁免平台实际注入的 SDK 目标。
+        if (resolved.startsWith('vibehub/_sdk/')) continue;
+      } else {
+        const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/') + 1) : '';
+        resolved = normalize(dir + clean);
+      }
+      if (resolved && !fileSet.has(resolved)) {
         missingRefs.push({ file: rel, ref: url });
       }
     }
@@ -151,6 +163,27 @@ function normalize(p) {
     else parts.push(seg);
   }
   return parts.join('/');
+}
+
+function isCriticalStaticRef(ref) {
+  return /\.(?:css|js)(?:[?#].*)?$/i.test(String(ref || '').trim());
+}
+
+export function calculateDiagnosisMetrics(items) {
+  const applicable = (Array.isArray(items) ? items : []).filter((item) => item.applicability === 'applicable');
+  const earned = applicable.reduce((sum, item) => sum + Number(item.earned_points || 0), 0);
+  const max = applicable.reduce((sum, item) => sum + Number(item.max_points || 0), 0);
+  const verifiedApplicableItems = applicable.filter((item) => item.evidence_level === 'verified').length;
+  return {
+    earned,
+    max,
+    applicable_earned: earned,
+    applicable_max: max,
+    applicable_items: applicable.length,
+    verified_applicable_items: verifiedApplicableItems,
+    completeness: max ? Math.round((100 * earned) / max) : 0,
+    verified_ratio: applicable.length ? Math.round((100 * verifiedApplicableItems) / applicable.length) : 0,
+  };
 }
 
 // ② 确定性评分
@@ -203,6 +236,7 @@ export function score(facts, { declaredFlows = [], previewProbe = null } = {}) {
     evidence: { findings: secretFindings },
   });
 
+  const criticalMissingRefs = (facts.missing_refs || []).filter((item) => isCriticalStaticRef(item.ref));
   add({
     check_key: 'refs_resolve',
     label: '页面引用的文件都在',
@@ -210,8 +244,8 @@ export function score(facts, { declaredFlows = [], previewProbe = null } = {}) {
     max_points: 20,
     earned_points: facts.missing_ref_count === 0 ? 20 : Math.max(0, 20 - facts.missing_ref_count * 5),
     result: facts.missing_ref_count === 0 ? 'pass' : 'fail',
-    is_blocker: facts.missing_ref_count > 3,
-    evidence: { missing: facts.missing_refs, count: facts.missing_ref_count },
+    is_blocker: facts.missing_ref_count > 3 || criticalMissingRefs.length > 0,
+    evidence: { missing: facts.missing_refs, count: facts.missing_ref_count, critical_missing: criticalMissingRefs },
   });
 
   // 预览可访问只认服务端的探测事实。没有探测、超时或探测器故障都不能加分。
@@ -259,25 +293,21 @@ export function score(facts, { declaredFlows = [], previewProbe = null } = {}) {
     });
   }
 
-  // 核心路径：学员声明了才适用；P0 没有自动验证手段 → unknown + 需人工确认
-  if (declaredFlows.length) {
-    add({
-      check_key: 'core_flows',
-      label: '核心操作路径可完成',
-      applicability: 'applicable',
-      max_points: 20, earned_points: 0, result: 'unknown',
-      evidence_level: 'human_required',
-      evidence: { flows: declaredFlows, note: '需要人工或后续自动化验证' },
-    });
-  } else {
-    add({
-      check_key: 'core_flows',
-      label: '核心操作路径可完成',
-      applicability: 'not_applicable',
-      max_points: 20, earned_points: 0, result: 'not_applicable',
-      evidence: { reason: '学员没有声明核心操作路径（deploy 时可用 --flows 声明）' },
-    });
-  }
+  // 核心路径总是适用；P0 没有自动验证手段 → unknown + 需人工确认。
+  // 声明 flows 只补充人工审核信息，绝不能通过缩小分母来抬高完成度。
+  const flows = Array.isArray(declaredFlows) ? declaredFlows : [];
+  add({
+    check_key: 'core_flows',
+    label: '核心操作路径可完成',
+    applicability: 'applicable',
+    max_points: 20, earned_points: 0, result: 'unknown',
+    evidence_level: 'human_required',
+    evidence: {
+      flows,
+      declaration_status: flows.length ? 'declared' : 'undeclared',
+      note: flows.length ? '已声明核心操作路径，仍需人工或后续自动化验证' : '未声明核心操作路径，待人工确认',
+    },
+  });
 
   add({
     check_key: 'content_ready',
@@ -294,13 +324,10 @@ export function score(facts, { declaredFlows = [], previewProbe = null } = {}) {
     if (i.result === 'unknown' && i.evidence_level === 'verified') i.evidence_level = 'human_required';
   }
 
-  const applicable = items.filter((i) => i.applicability === 'applicable');
-  const earned = applicable.reduce((s, i) => s + i.earned_points, 0);
-  const max = applicable.reduce((s, i) => s + i.max_points, 0);
-  const percent = max ? Math.round((100 * earned) / max) : 0;
+  const metrics = calculateDiagnosisMetrics(items);
   const blocked = items.some((i) => i.is_blocker);
 
-  return { items, percent, earned, max, blocked };
+  return { items, percent: metrics.completeness, ...metrics, blocked };
 }
 
 // ③ 结论（P0 用模板；P1 换模型翻译，模型不许改分数）
@@ -345,23 +372,26 @@ export function runDiagnosis({ versionId, projectId, versionDir, flows, previewP
   const facts = { ...collectFacts(versionDir, projectId, { rejected }), preview_probe: previewProbe || null };
   const scored = score(facts, { declaredFlows: flows || [], previewProbe });
   const { summary, next_steps } = summarize(scored);
-  const status = scored.blocked ? 'blocked' : scored.percent >= 85 ? 'healthy' : 'needs_work';
+  const status = scored.blocked ? 'blocked' : scored.completeness >= 85 ? 'healthy' : 'needs_work';
   const id = diagnosisId || 'd_' + nanoid(12);
   const ts = now();
   if (diagnosisId) {
     db.prepare(`UPDATE diagnoses SET status=?,score=?,policy_version=?,facts=?,items=?,summary=?,next_steps=?,
                 model=NULL,model_items=NULL,finished_at=? WHERE id=?`)
-      .run(status, scored.percent, POLICY_VERSION, JSON.stringify(facts), JSON.stringify(scored.items), summary,
+      .run(status, scored.completeness, POLICY_VERSION, JSON.stringify(facts), JSON.stringify(scored.items), summary,
         JSON.stringify(next_steps), ts, id);
   } else {
     db.prepare(
       `INSERT INTO diagnoses (id,version_id,status,score,policy_version,facts,items,summary,next_steps,model,created_at,finished_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
-    ).run(id, versionId, status, scored.percent, POLICY_VERSION,
+    ).run(id, versionId, status, scored.completeness, POLICY_VERSION,
       JSON.stringify(facts), JSON.stringify(scored.items), summary,
       JSON.stringify(next_steps), null, ts, ts);
   }
-  return { id, status, score: scored.percent, items: scored.items, summary, next_steps, facts };
+  return {
+    id, status, score: scored.completeness, items: scored.items, summary, next_steps, facts,
+    completeness: scored.completeness, verified_ratio: scored.verified_ratio,
+  };
 }
 
 export function applyModelTranslation(diagnosisId, translation) {

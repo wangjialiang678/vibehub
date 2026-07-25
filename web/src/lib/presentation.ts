@@ -1,9 +1,11 @@
 export type DiagnosisItemLike = {
+  check_key?: string | null;
   applicability?: string | null;
   earned_points?: number | null;
   max_points?: number | null;
   result?: string | null;
   evidence_level?: string | null;
+  evidence?: { declaration_status?: string | null } | null;
 };
 
 export type ProjectStatusLike = {
@@ -14,6 +16,19 @@ export type ProjectStatusLike = {
 
 export function formatNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat('zh-CN').format(Number.isFinite(value) ? Number(value) : 0);
+}
+
+export function formatDiagnosisPercentage(value: number | null | undefined): string {
+  return Number.isFinite(value) ? `${Math.round(Number(value))}%` : '—';
+}
+
+/**
+ * `score` 是旧 API 的完成度兼容字段；诊断尚未产出检查器结果时绝不能用它冒充新结果。
+ */
+export function diagnosisCompleteness(diagnosis: { status?: string | null; completeness?: number | null; score?: number | null } | null | undefined): number | null {
+  if (!diagnosis || diagnosis.status === 'running' || diagnosis.status === 'failed') return null;
+  if (Number.isFinite(diagnosis.completeness)) return Number(diagnosis.completeness);
+  return Number.isFinite(diagnosis.score) ? Number(diagnosis.score) : null;
 }
 
 export function formatDateTime(value: string | null | undefined): string {
@@ -68,6 +83,13 @@ export function evidenceLabel(level: string | null | undefined): string {
     human_required: '⚠需人工确认',
   };
   return labels[level ?? ''] ?? '○ 暂无证据';
+}
+
+export function diagnosisEvidenceLabel(item: DiagnosisItemLike): string {
+  if (item.check_key === 'core_flows' && item.result === 'unknown' && item.evidence?.declaration_status === 'undeclared') {
+    return '未声明·待人工确认';
+  }
+  return evidenceLabel(item.evidence_level);
 }
 
 export function postLoginPath(role: string | null | undefined): '/app' | '/admin' {

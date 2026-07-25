@@ -125,6 +125,6 @@ $(sed '/VERDICT:/d' "$DL/review-$ROUND.md" | head -40)"
   fi
 done
 
-head "${c_r}达到最大轮次（$MAX）仍未通过闭环${c_x}"
-log "最后一轮反馈见 $DL，请人工介入。"
+head "${c_r}达到最大轮次（${MAX}）仍未通过闭环${c_x}"
+log "最后一轮反馈见 ${DL}，请人工介入。"
 exit 1

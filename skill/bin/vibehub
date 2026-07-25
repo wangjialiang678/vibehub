@@ -143,9 +143,25 @@ const cmds = {
       say(`          ${c.d}审核通过后才会替换线上版本${c.x}`);
     }
     const d = s.latest_diagnosis;
-    if (d) {
-      say(`\n完成度    ${c.bold}${d.score}%${c.x}  ${c.d}(${d.applicable_earned}/${d.applicable_max} 分，只算适用项)${c.x}`);
-      say(`          ${d.summary}`);
+    if (d && d.status === 'failed') {
+      // failed = 诊断本身没跑完，但版本已经提交、进了老师的审核队列（服务端仍会建 review）。
+      // 别说「重新 deploy 就会重新诊断」——相同内容会被判重、直接跳过，不会重新入队。
+      say(`\n${c.y}这次诊断没跑完${c.x}，不过你的版本已经提交，老师可以直接审核。`);
+      say(`${c.d}想重新诊断的话，改一点内容再 ${c.x}${c.bold}vibehub deploy${c.x}${c.d} 就会重新跑。${c.x}`);
+    } else if (d) {
+      const completeness = d.status === 'running'
+        ? null
+        : (Number.isFinite(d.completeness) ? d.completeness : d.score);
+      const coverage = Number.isFinite(d.verified_ratio) ? `${d.verified_ratio}%` : '—';
+      if (Number.isFinite(completeness)) {
+        say(`\n开发完成度  ${c.bold}${completeness}%${c.x}  ${c.d}(${d.applicable_earned}/${d.applicable_max} 分，只算适用项)${c.x}`);
+        say(`          验证覆盖率 ${coverage}`);
+      } else {
+        say(`\n${c.d}诊断正在进行，稍后用 vibehub status 查看${c.x}`);
+      }
+      if (d.stale) say(`          ${c.y}诊断更新中，以上是上一版本结果${c.x}`);
+      if (d.blocked || d.status === 'blocked') say(`          ${c.r}有阻塞问题，先修好再提交审核${c.x}`);
+      if (d.summary) say(`          ${d.summary}`);
       for (const i of d.items) {
         const mark = i.applicability === 'not_applicable' ? `${c.d}—${c.x}`
           : i.result === 'pass' ? `${c.g}✓${c.x}` : i.result === 'fail' ? `${c.r}✗${c.x}` : `${c.y}?${c.x}`;

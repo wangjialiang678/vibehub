@@ -180,7 +180,7 @@ CREATE TABLE diagnoses (
   id          TEXT PRIMARY KEY,
   version_id  TEXT NOT NULL REFERENCES versions(id),  -- 强制绑定版本（需求文档 §14.6 硬要求）
   status      TEXT NOT NULL,                -- running | healthy | needs_work | blocked | failed
-  score       INTEGER,                      -- 0-100 整体完成度
+  score       INTEGER,                      -- 兼容字段：等同 API 的 completeness（完成度）
   facts       TEXT NOT NULL,                -- JSON：确定性采集的客观事实
   dimensions  TEXT NOT NULL,                -- JSON：分维度结论 [{key,label,score,verdict,evidence}]
   summary     TEXT,                         -- 一句话综合结论
@@ -333,7 +333,7 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 | 「现在的项目长这样」预览 | `deployments(target=preview).url` |
 | 「你的网页」`https://supermind-ai.cn/vibehub/<username>/voice-map/` + 二维码 | 由用户名和 `projects.slug` 生成 |
 | 「上线后的表现」1,284 / 186 / 94 / +18% | umami API，按 `umami_website_id` |
-| 「开发完成度 86%」 | `diagnoses.score` |
+| 「开发完成度 86% / 验证覆盖率 71%」 | `diagnoses.items` 确定性复算（`score` 兼容等同完成度） |
 | 「客户端/前端 100%」「服务端 72%」 | `diagnoses.dimensions` |
 | 「已具备完整预览版本，可以继续打磨服务端数据」 | `diagnoses.summary` |
 | 「当前线上版本 v1.1.0 / 新提交版本 v1.2.0」 | `live_version_id` / `pending_version_id` |

@@ -56,10 +56,21 @@ audience: tech
   "project": { "id","slug","title","dev_status","publish_status","live_url" },
   "live_version":    { "id","label","seq","submitted_at","preview_url" },
   "pending_version": { "id","label","seq","submitted_at","preview_url" },
-  "latest_diagnosis":{ "version_id","status","score","summary","next_steps":[..],"finished_at" },
+  "latest_diagnosis":{ "version_id","status","score","completeness","verified_ratio",
+                       "applicable_earned","applicable_max","applicable_items","verified_applicable_items",
+                       "summary","next_steps":[..],"finished_at" },
   "last_review":     { "status","comment","decided_at" }   // 驳回原因在这里
 }
 ```
+
+诊断的两个百分比都由服务端确定性检查器从 `items` 复算，模型不得修改：
+
+- `completeness`（完成度）= `applicable_earned / applicable_max`；`score` 是兼容旧客户端的同值字段。
+- `verified_ratio`（验证覆盖率）= `verified_applicable_items / applicable_items`；只统计 `evidence_level='verified'` 的适用项。
+
+诊断尚在 `running` 或已经 `failed` 时，以上两个指标及其分子/分母为 `null`，表示检查器还没有可复算的结果，客户端不得展示为 `0%`。
+
+`GET /api/projects/:id` 的 `latest_diagnosis` 和 `GET /api/reviews/:id` 的 `diagnosis` 返回同一组字段。`not_applicable` 项不计入任一分母；未声明的核心路径仍是 `applicable + unknown + human_required`，计入完成度的分母。
 
 ### `POST /api/skill/versions/preflight`
 避免重复上传。
@@ -143,7 +154,7 @@ audience: tech
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `GET` | `/api/reviews?camp_id=&status=pending` | 审核队列（原型 `#admin` 左栏） |
-| `GET` | `/api/reviews/:id` | 单条详情：版本信息、预览地址、诊断摘要、本次更新说明 |
+| `GET` | `/api/reviews/:id` | 单条详情：版本信息、预览地址、含完成度与验证覆盖率的诊断摘要、本次更新说明 |
 | `POST` | `/api/reviews/:id/approve` | `{ comment? }` → 事务更新 + 原子切换软链 |
 | `POST` | `/api/reviews/:id/reject` | `{ comment }` —— **comment 必填**，学员要看到驳回原因 |
 

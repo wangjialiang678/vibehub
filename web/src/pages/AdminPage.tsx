@@ -7,7 +7,7 @@ import { ModeTabs } from '../components/Shell';
 import { Avatar, LoginRequired, PageState, PreviewFrame } from '../components/Ui';
 import { TeacherPage } from '../components/TeacherPage';
 import { usePageVisibility } from '../lib/pageVisibility';
-import { formatDateTime, getReviewSummary } from '../lib/presentation';
+import { diagnosisCompleteness, formatDateTime, formatDiagnosisPercentage, getReviewSummary } from '../lib/presentation';
 import type { Diagnosis, ReviewDetail, ReviewQueueItem } from '../lib/types';
 
 export function AdminPage() {
@@ -55,7 +55,9 @@ function DiagnosisSummary({ diagnosis, liveLabel }: { diagnosis: Diagnosis | nul
   const backend = items.find((item) => item.check_key === 'baas_connected');
   const frontendSummary = getReviewSummary(frontend, 'frontend');
   const backendSummary = getReviewSummary(backend, 'backend');
-  return <div className="diagnosis-summary-strip"><SummaryCell title="前端" {...frontendSummary} /><SummaryCell title="服务端" {...backendSummary} /><SummaryCell title="线上版本" value={liveLabel || '未上线'} /></div>;
+  const completeness = diagnosisCompleteness(diagnosis);
+  const markers = [diagnosis?.stale && '诊断更新中', (diagnosis?.blocked || diagnosis?.status === 'blocked') && '有阻塞问题'].filter(Boolean).join(' · ');
+  return <div className="diagnosis-summary-strip"><SummaryCell title="开发完成度" value={formatDiagnosisPercentage(completeness)} detail={`验证覆盖率 ${formatDiagnosisPercentage(diagnosis?.verified_ratio)}${markers ? ` · ${markers}` : ''}`} /><SummaryCell title="前端" {...frontendSummary} /><SummaryCell title="服务端" {...backendSummary} /><SummaryCell title="线上版本" value={liveLabel || '未上线'} /></div>;
 }
 
 function SummaryCell({ title, value, detail }: { title: string; value: string; detail?: string }) {

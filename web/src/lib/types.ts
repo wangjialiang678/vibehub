@@ -24,6 +24,7 @@ export interface DiagnosisItem {
   max_points?: number;
   result?: 'pass' | 'fail' | 'unknown' | 'not_applicable' | string;
   evidence_level?: 'verified' | 'client_reported' | 'ai_inferred' | 'human_required' | string;
+  evidence?: { declaration_status?: 'declared' | 'undeclared' | string };
   is_blocker?: boolean;
 }
 
@@ -32,6 +33,13 @@ export interface Diagnosis {
   status?: string;
   stale?: boolean;
   score?: number | null;
+  completeness?: number | null;
+  verified_ratio?: number | null;
+  applicable_earned?: number | null;
+  applicable_max?: number | null;
+  applicable_items?: number | null;
+  verified_applicable_items?: number | null;
+  blocked?: boolean;
   items: DiagnosisItem[];
   summary?: string | null;
   next_steps?: string[];

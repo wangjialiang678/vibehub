@@ -168,12 +168,14 @@ export function rewriteAbsolutePaths(dir, basePath) {
     const depth = rel.split('/').length - 1;
     const up = depth === 0 ? './' : '../'.repeat(depth);
 
-    // href="/x" src="/x" url(/x) —— 只改指向包内确实存在的文件的那些
-    text = text.replace(/(href|src)=("|')(\/[^"']*)\2/g, (m, attr, q, url) => {
+    // href="/x" src="/x" url(/x) —— 只改指向包内确实存在的文件的那些。
+    // 大小写不敏感 + 允许 = 两侧空格，必须与 diagnosis.js 的采集正则保持一致，
+    // 否则 `HREF="/main.css"` 这类不会被改写、运行时请求域名根 404，而诊断又看包内有同名文件误判「不缺失」。
+    text = text.replace(/(href|src)(\s*=\s*)("|')(\/[^"']*)\3/gi, (m, attr, eq, q, url) => {
       if (!isLocal(url)) return m;
       const fixed = up + url.slice(1);
       rewrites.push({ file: rel, from: url, to: fixed });
-      return `${attr}=${q}${fixed}${q}`;
+      return `${attr}${eq}${q}${fixed}${q}`;
     });
     text = text.replace(/url\(\s*("|'|)(\/[^"')]*)\1\s*\)/g, (m, q, url) => {
       if (!isLocal(url)) return m;

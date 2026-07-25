@@ -17,6 +17,7 @@ const { db, now } = await import('../src/lib/db.js');
 const { issueToken } = await import('../src/lib/auth.js');
 const { paths, LIMITS } = await import('../src/lib/config.js');
 const { collectFacts, score, summarize } = await import('../src/services/diagnosis.js');
+const { projectSnapshot } = await import('../src/routes/_shared.js');
 const { probePreviewHttp } = await import('../src/services/preview-probe.js');
 const { pruneProjectArtifacts, projectDiskUsage } = await import('../src/services/storage.js');
 
@@ -194,6 +195,206 @@ test('预览分数只采信真实 HTTP 探测，并保存探测事实', () => {
   assert.equal(unknown.earned_points, 0);
 });
 
+test('未声明核心路径仍计入完成度和验证覆盖率的分母，声明只补充证据', () => {
+  const facts = {
+    has_index: true, file_count: 3, index_visible_text_length: 80,
+    missing_ref_count: 0, missing_refs: [], uses_sdk: false,
+    baas_calls_total: 0, baas_calls_ok: 0, baas_records: 0, placeholder_hits: 0,
+  };
+  const undeclared = score(facts, {});
+  const core = undeclared.items.find((item) => item.check_key === 'core_flows');
+  const applicable = undeclared.items.filter((item) => item.applicability === 'applicable');
+  const verified = applicable.filter((item) => item.evidence_level === 'verified');
+
+  assert.equal(core.applicability, 'applicable');
+  assert.equal(core.result, 'unknown');
+  assert.equal(core.evidence_level, 'human_required');
+  assert.deepEqual(core.evidence.flows, []);
+  assert.equal(core.evidence.declaration_status, 'undeclared');
+  assert.match(core.evidence.note, /未声明.*待人工确认/);
+  assert.equal(core.earned_points, 0);
+  assert.equal(undeclared.applicable_max, applicable.filter((item) => item !== core).reduce((sum, item) => sum + item.max_points, 0) + core.max_points);
+  assert.equal(undeclared.applicable_items, applicable.length);
+  assert.equal(undeclared.completeness, Math.round(100 * undeclared.earned / undeclared.max));
+  assert.equal(undeclared.verified_ratio, Math.round(100 * verified.length / applicable.length));
+
+  const declared = score(facts, { declaredFlows: ['上传作品'] });
+  const declaredCore = declared.items.find((item) => item.check_key === 'core_flows');
+  assert.deepEqual(declaredCore.evidence.flows, ['上传作品']);
+  assert.equal(declaredCore.evidence.declaration_status, 'declared');
+  assert.equal(declared.max, undeclared.max);
+  assert.equal(declared.completeness, undeclared.completeness);
+  assert.equal(declared.verified_ratio, undeclared.verified_ratio);
+});
+
+test('缺失被引用的主样式或脚本会成为 blocker', () => {
+  const artifactDir = mkdtempSync(join(tmpdir(), 'vh-missing-static-'));
+  try {
+    writeFileSync(join(artifactDir, 'index.html'), '<link rel="stylesheet" href="assets/main.css"><script src="assets/main.js?v=1"></script>');
+    const facts = collectFacts(artifactDir, 'p_missing_static');
+    const scored = score(facts, {});
+    const refs = scored.items.find((item) => item.check_key === 'refs_resolve');
+
+    assert.deepEqual(facts.missing_refs, [
+      { file: 'index.html', ref: 'assets/main.css' },
+      { file: 'index.html', ref: 'assets/main.js?v=1' },
+    ]);
+    assert.equal(refs.is_blocker, true);
+    assert.equal(scored.blocked, true);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('绝对路径引用的缺失主样式/脚本也会成为 blocker（真实采集路径）', () => {
+  const artifactDir = mkdtempSync(join(tmpdir(), 'vh-missing-abs-'));
+  try {
+    // 作品跑在子目录，写 /main.css /app.js 都指向包内根。解包会把「存在的」绝对引用
+    // 改成相对，仍以 / 开头的必然是缺失。这里两个目标都不在包内 → 应进 missing_refs 且 blocker。
+    writeFileSync(join(artifactDir, 'index.html'),
+      '<link rel="stylesheet" href="/main.css"><script src="/app.js"></script><img src="/logo.png">');
+    const facts = collectFacts(artifactDir, 'p_missing_abs');
+    const scored = score(facts, {});
+    assert.deepEqual(facts.missing_refs, [
+      { file: 'index.html', ref: '/main.css' },
+      { file: 'index.html', ref: '/app.js' },
+      { file: 'index.html', ref: '/logo.png' },
+    ]);
+    assert.equal(scored.blocked, true, '关键 CSS/JS 缺失必须 blocker');
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('大写属性名与等号空格的缺失引用同样被检测为 blocker', () => {
+  const artifactDir = mkdtempSync(join(tmpdir(), 'vh-missing-case-'));
+  try {
+    // 合法 HTML：HREF、SRC = "..." 都要能采集，否则破损版本靠大小写/空格绕过 blocker
+    writeFileSync(join(artifactDir, 'index.html'),
+      '<link HREF="/main.css"><script SRC = "/app.js"></script>');
+    const facts = collectFacts(artifactDir, 'p_case');
+    const scored = score(facts, {});
+    assert.equal(facts.missing_ref_count, 2);
+    assert.equal(scored.blocked, true);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('SDK 排除只针对平台注入路径；/vibehub 下其他缺失脚本仍是 blocker', () => {
+  const artifactDir = mkdtempSync(join(tmpdir(), 'vh-sdk-scope-'));
+  try {
+    // 平台注入的 /vibehub/_sdk/vibehub.js 不算缺失；但学员写的 /vibehub/missing-main.js 真 404 应算
+    writeFileSync(join(artifactDir, 'index.html'),
+      '<script src="/vibehub/_sdk/vibehub.js" data-vibehub-sdk></script><script src="/vibehub/missing-main.js"></script>');
+    const facts = collectFacts(artifactDir, 'p_sdk');
+    assert.deepEqual(facts.missing_refs, [{ file: 'index.html', ref: '/vibehub/missing-main.js' }]);
+    assert.equal(score(facts, {}).blocked, true);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('SDK 豁免在规范化后判定，_sdk/../ 穿越到真 404 仍是 blocker', () => {
+  const artifactDir = mkdtempSync(join(tmpdir(), 'vh-sdk-traverse-'));
+  try {
+    // 浏览器会把 /vibehub/_sdk/../missing.js 规范化成 /vibehub/missing.js（真 404），不能用原字符串前缀蒙混
+    writeFileSync(join(artifactDir, 'index.html'), '<script src="/vibehub/_sdk/../missing.js"></script>');
+    const facts = collectFacts(artifactDir, 'p_trav');
+    assert.deepEqual(facts.missing_refs, [{ file: 'index.html', ref: '/vibehub/_sdk/../missing.js' }]);
+    assert.equal(score(facts, {}).blocked, true);
+  } finally {
+    rmSync(artifactDir, { recursive: true, force: true });
+  }
+});
+
+test('新版本诊断中时，不会被旧的 failed 诊断伪装成本次失败', () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const ver1 = addVersion(project.id, owner.id, 1);
+  const ver2 = addVersion(project.id, owner.id, 2);
+  db.prepare('UPDATE projects SET pending_version_id=? WHERE id=?').run(ver2.id, project.id);
+  const insertDiag = (vid, status) => db.prepare(`INSERT INTO diagnoses
+    (id,version_id,status,score,policy_version,facts,items,summary,next_steps,created_at,finished_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(nextId('d'), vid, status, status === 'running' ? null : 0, 'test', '{}', '[]', 's', '[]',
+      now(), status === 'running' ? null : now());
+  insertDiag(ver1.id, 'failed');
+  insertDiag(ver2.id, 'running');
+  const snap = projectSnapshot(project.id);
+  // 最新版本 v2 正在诊断 → 应显示 running（stale），绝不能被 v1 的 failed 伪装成"这次失败"
+  assert.equal(snap.latest_diagnosis.status, 'running');
+  assert.equal(snap.latest_diagnosis.stale, true);
+});
+
+test('skill、项目和审核详情都返回可复算的完成度与验证覆盖率', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const version = addVersion(student.project.id, student.user.id, 1);
+  const facts = {
+    has_index: true, file_count: 1, index_visible_text_length: 80,
+    missing_ref_count: 0, missing_refs: [], uses_sdk: false,
+    baas_calls_total: 0, baas_calls_ok: 0, baas_records: 0, placeholder_hits: 0,
+  };
+  const scored = score(facts, {});
+  db.prepare('UPDATE projects SET pending_version_id=? WHERE id=?').run(version.id, student.project.id);
+  db.prepare(`INSERT INTO diagnoses (id,version_id,status,score,policy_version,facts,items,summary,next_steps,created_at,finished_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(nextId('d'), version.id, 'needs_work', 1, 'test', JSON.stringify(facts),
+      JSON.stringify(scored.items), '测试诊断', '[]', now(), now());
+  const reviewId = addReview({ versionId: version.id, projectId: student.project.id, campId: camp.id });
+  const { token: teacherTokenValue } = teacherToken(camp.id);
+
+  const skillProject = await app.inject({ method: 'GET', url: '/api/skill/project', headers: { authorization: `Bearer ${student.token}` } });
+  const studentProject = await app.inject({ method: 'GET', url: `/api/projects/${student.project.id}`, headers: { authorization: `Bearer ${student.token}` } });
+  const review = await app.inject({ method: 'GET', url: `/api/reviews/${reviewId}`, headers: { authorization: `Bearer ${teacherTokenValue}` } });
+
+  for (const diagnosis of [skillProject.json().latest_diagnosis, studentProject.json().latest_diagnosis, review.json().diagnosis]) {
+    assert.equal(diagnosis.score, scored.completeness);
+    assert.equal(diagnosis.completeness, scored.completeness);
+    assert.equal(diagnosis.verified_ratio, scored.verified_ratio);
+    assert.equal(diagnosis.completeness, Math.round(100 * diagnosis.applicable_earned / diagnosis.applicable_max));
+    assert.equal(diagnosis.verified_ratio, Math.round(100 * diagnosis.verified_applicable_items / diagnosis.applicable_items));
+  }
+});
+
+test('诊断仍在运行时，两个尚未计算的指标返回 null 而不是伪装成 0%', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const version = addVersion(student.project.id, student.user.id, 1);
+  db.prepare('UPDATE projects SET pending_version_id=? WHERE id=?').run(version.id, student.project.id);
+  db.prepare(`INSERT INTO diagnoses (id,version_id,status,score,policy_version,facts,items,summary,next_steps,created_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(nextId('d'), version.id, 'running', 73, 'test', '{}', '[]', null, '[]', now());
+
+  const project = await app.inject({ method: 'GET', url: '/api/skill/project', headers: { authorization: `Bearer ${student.token}` } });
+  const diagnosis = project.json().latest_diagnosis;
+  assert.equal(diagnosis.status, 'running');
+  assert.equal(diagnosis.score, null);
+  assert.equal(diagnosis.completeness, null);
+  assert.equal(diagnosis.verified_ratio, null);
+});
+
+test('诊断失败时，两个未计算指标和兼容分数也返回 null', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const version = addVersion(student.project.id, student.user.id, 1);
+  db.prepare('UPDATE projects SET pending_version_id=? WHERE id=?').run(version.id, student.project.id);
+  db.prepare(`INSERT INTO diagnoses (id,version_id,status,score,policy_version,facts,items,summary,next_steps,created_at,finished_at)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(nextId('d'), version.id, 'failed', 73, 'test', '{}', '[]', '诊断失败', '[]', now(), now());
+
+  const project = await app.inject({ method: 'GET', url: '/api/skill/project', headers: { authorization: `Bearer ${student.token}` } });
+  const diagnosis = project.json().latest_diagnosis;
+  assert.equal(diagnosis.status, 'failed');
+  assert.equal(diagnosis.score, null);
+  assert.equal(diagnosis.completeness, null);
+  assert.equal(diagnosis.verified_ratio, null);
+  assert.equal(diagnosis.applicable_earned, null);
+  assert.equal(diagnosis.verified_applicable_items, null);
+});
+
 test('HTTP 探测会检查入口与同一预览目录的静态资源，浏览器专属事实保持 unknown', async () => {
   const server = createServer((req, res) => {
     if (req.url === '/vibehub/_preview/p1/') {
@@ -315,6 +516,9 @@ test('异步诊断发现 blocker 后不进入老师审核队列', async () => {
   assert.equal(diagnosis.status, 'blocked');
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM reviews WHERE version_id=?').get(versionId).n, 0);
   assert.equal(db.prepare('SELECT dev_status FROM projects WHERE id=?').get(student.project.id).dev_status, 'needs_revision');
+  // blocked 会清空 pending_version_id，但学员看板仍必须能看到这份 blocked 诊断（否则学员不知道为什么被退回）
+  const snapshot = await app.inject({ method: 'GET', url: '/api/skill/project', headers: { authorization: `Bearer ${student.token}` } });
+  assert.equal(snapshot.json().latest_diagnosis.status, 'blocked');
 });
 
 test('黄金路径 bind → deploy → approve → 正式地址 200 仍可跑通', async () => {

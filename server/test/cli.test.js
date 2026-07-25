@@ -131,3 +131,41 @@ test('deploy 的打包产物不会包含敏感文件或密钥目录', async () =
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }
 });
+
+test('status 同时展示完成度与验证覆盖率', async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/api/skill/project') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        project: { title: '测试作品', publish_status: 'unpublished' },
+        camp: { name: '测试营' },
+        latest_diagnosis: {
+          score: 82,
+          completeness: 82,
+          verified_ratio: 57,
+          applicable_earned: 90,
+          applicable_max: 110,
+          items: [],
+          summary: '诊断已完成。',
+        },
+      }));
+    }
+    req.resume();
+    res.writeHead(404).end();
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-status-home-');
+  mkdirSync(join(home, '.vibehub'));
+  writeFileSync(join(home, '.vibehub', 'credentials.json'), JSON.stringify({ token: 'test-token', api }));
+
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'status'], {
+      cwd: resolve('..'), env: { ...process.env, HOME: home, VIBEHUB_API: api },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /完成度\s+\x1B\[1m82%/);
+    assert.match(result.stdout, /验证覆盖率\s+57%/);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});
