@@ -1,37 +1,35 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { api, readableError } from '../lib/api';
-import { AppShell, ModeTabs } from '../components/Shell';
+import { ModeTabs } from '../components/Shell';
 import { Avatar, LoginRequired, PageState, PreviewFrame } from '../components/Ui';
+import { TeacherPage } from '../components/TeacherPage';
+import { usePageVisibility } from '../lib/pageVisibility';
 import { formatDateTime, getReviewSummary } from '../lib/presentation';
 import type { Diagnosis, ReviewDetail, ReviewQueueItem } from '../lib/types';
 
 export function AdminPage() {
-  const location = useLocation();
-  const token = new URLSearchParams(location.search).get('token');
-  const [ready, setReady] = useState(!token);
+  return <TeacherPage active="审核">{(session) => <ReviewDesk campSlug={session.camp.slug} campName={session.camp.name} />}</TeacherPage>;
+}
+
+function ReviewDesk({ campSlug, campName }: { campSlug: string; campName: string }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  useEffect(() => {
-    if (!token) return;
-    document.cookie = `vh_session=${encodeURIComponent(token)}; Path=/; SameSite=Lax`;
-    window.history.replaceState({}, '', location.pathname);
-    setReady(true);
-  }, [location.pathname, token]);
-  const queue = useQuery({ queryKey: ['reviews'], queryFn: api.reviews, enabled: ready, retry: false });
+  const pageVisible = usePageVisibility();
+  const queue = useQuery({ queryKey: ['reviews'], queryFn: api.reviews, retry: false, refetchInterval: pageVisible ? 4000 : false });
   useEffect(() => {
     if (!selectedId && queue.data?.items[0]) setSelectedId(queue.data.items[0].id);
   }, [queue.data, selectedId]);
   const detail = useQuery({ queryKey: ['review', selectedId], queryFn: () => api.review(selectedId!), enabled: Boolean(selectedId), retry: false });
-  if (!ready || queue.isPending) return <PageState title="正在打开审核队列…" />;
+  if (queue.isPending) return <PageState title="正在打开审核队列…" />;
   if (queue.isError) {
     const unauthorized = 'status' in queue.error && (queue.error as { status: number }).status === 401;
     return unauthorized ? <LoginRequired admin /> : <PageState error={queue.error} />;
   }
   const handled = (message: string) => { setSelectedId(null); setNotice(message); };
-  return <AppShell role="teacher" active="审核" campSlug="ai-product-2026s" avatar="师"><main className="dashboard-content admin-content"><header className="page-heading"><div><p className="breadcrumb">AI 产品共创课　/　审核</p><h1>部署审核</h1><p className="review-counts"><b>{queue.data.counts.pending ?? queue.data.items.length}</b> 个待处理　·　{queue.data.counts.published ?? 0} 个已发布</p></div><ModeTabs active="admin" /></header>{notice && <p className="action-message admin-notice">{notice}</p>}<section className="admin-workspace"><ReviewQueue items={queue.data.items} selectedId={selectedId} onSelect={setSelectedId} /><ReviewPane detail={detail.data} isLoading={detail.isPending} error={detail.error} onProcessed={handled} /></section></main></AppShell>;
+  return <main className="dashboard-content admin-content"><header className="page-heading"><div><p className="breadcrumb">{campName}　/　审核</p><h1>部署审核</h1><p className="review-counts"><b>{queue.data.counts.pending ?? queue.data.items.length}</b> 个待处理　·　{queue.data.counts.published ?? 0} 个已发布</p></div><ModeTabs campSlug={campSlug} active="admin" /></header>{notice && <p className="action-message admin-notice">{notice}</p>}<section className="admin-workspace"><ReviewQueue items={queue.data.items} selectedId={selectedId} onSelect={setSelectedId} /><ReviewPane detail={detail.data} isLoading={detail.isPending} error={detail.error} onProcessed={handled} /></section></main>;
 }
 
 function ReviewQueue({ items, selectedId, onSelect }: { items: ReviewQueueItem[]; selectedId: string | null; onSelect: (id: string) => void }) {

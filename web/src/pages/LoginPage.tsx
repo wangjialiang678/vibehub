@@ -26,13 +26,13 @@ export function LoginPage() {
       <section className="login-panel">
         <LinkMark />
         <p className="eyebrow">AI 产品共创课</p>
-        <h1>带着邀请码，<br />进入你的作品。</h1>
-        <p className="login-copy">这里没有密码。邀请码就是你在课程里的身份，输入后就能回到自己的项目。</p>
+        <h1>带着邀请码，<br />进入你的营地。</h1>
+        <p className="login-copy">这里没有密码。邀请码就是你在课程里的身份；学员进入项目，老师进入营地管理台。</p>
         <form onSubmit={submit} className="invite-form">
           <label htmlFor="invite-code">邀请码</label>
           <input id="invite-code" autoCapitalize="characters" autoComplete="off" placeholder="例如 CAMP-7K3P" value={code} onChange={(event) => setCode(event.target.value)} disabled={redeem.isPending} />
           {redeem.isError && <p className="form-error" role="alert">{readableError(redeem.error, '邀请码没有验证成功，请检查后重试。')}</p>}
-          <button className="button button-coral button-wide" type="submit" disabled={!code.trim() || redeem.isPending}>{redeem.isPending ? '正在进入…' : '进入我的项目'}</button>
+          <button className="button button-coral button-wide" type="submit" disabled={!code.trim() || redeem.isPending}>{redeem.isPending ? '正在进入…' : '进入 VibeHub'}</button>
         </form>
         <p className="login-help">邀请码找不到了？请联系老师重新获取。</p>
       </section>

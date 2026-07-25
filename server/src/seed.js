@@ -22,6 +22,9 @@ db.prepare('INSERT INTO camp_members (camp_id,user_id,role,joined_at) VALUES (?,
   .run(campId, teacherId, 'teacher', now());
 
 const teacherToken = issueToken({ kind: 'web', userId: teacherId, campId, role: 'teacher' });
+const teacherInviteCode = `CAMP-${codeGen()}`;
+db.prepare(`INSERT INTO invites (code,camp_id,role,status,max_devices,bound_user_id,created_at)
+            VALUES (?,?,?,'unused',3,?,?)`).run(teacherInviteCode, campId, 'teacher', teacherId, now());
 
 // 集合页演示用的已发布作品；必须带分类，才能让「创作主题」反映真实内容。
 const sampleStudentId = 'u_' + nanoid(10);
@@ -60,5 +63,6 @@ console.log(JSON.stringify({
   camp_id: campId,
   camp_slug: 'ai-product-2026s',
   teacher_token: teacherToken,
+  teacher_invite_code: teacherInviteCode,
   student_invite_codes: codes,
 }, null, 2));

@@ -11,15 +11,15 @@ const navItems: Array<{ label: string; icon: SidebarIconName }> = [
 ];
 
 export function AppShell({ children, active, role, campSlug = 'ai-product-2026s', avatar = 'V' }: { children: ReactNode; active: string; role: 'student' | 'teacher'; campSlug?: string; avatar?: string }) {
-  const activeLabel = role === 'teacher' ? '审核' : active;
-  const desktopNav: Array<{ label: string; icon: SidebarIconName }> = role === 'teacher'
-    ? [{ label: '总览', icon: 'home' }, { label: '项目', icon: 'folder' }, { label: '审核', icon: 'history' }, { label: '集合页', icon: 'book' }]
+  const activeLabel = active;
+  const desktopNav: Array<{ label: string; icon: SidebarIconName; to?: string }> = role === 'teacher'
+    ? [{ label: '总览', to: '/admin/overview', icon: 'home' }, { label: '项目', to: '/admin/projects', icon: 'folder' }, { label: '审核', to: '/admin', icon: 'history' }, { label: '集合页', to: `/c/${campSlug}`, icon: 'book' }]
     : navItems;
   return (
     <div className="dashboard-layout">
       <aside className="side-nav">
         <div className="side-nav-links">
-          {desktopNav.map((item) => <span className={`side-nav-item${item.label === activeLabel ? ' is-active' : ''}`} key={item.label}><SidebarIcon name={item.icon} />{item.label}</span>)}
+          {desktopNav.map((item) => item.to ? <Link to={item.to} className={`side-nav-item${item.label === activeLabel ? ' is-active' : ''}`} key={item.label}><SidebarIcon name={item.icon} />{item.label}</Link> : <span className={`side-nav-item${item.label === activeLabel ? ' is-active' : ''}`} key={item.label}><SidebarIcon name={item.icon} />{item.label}</span>)}
         </div>
         <span className="side-avatar">{avatar.slice(0, 1)}</span>
       </aside>

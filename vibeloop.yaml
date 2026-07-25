@@ -43,15 +43,11 @@ specs:
 # ⚠️ 在 verify 真正覆盖核心行为之前，所有 gates 保持 human——
 #    "你的自动化置信度上限，就是 verify 命令的严格程度"。
 verify:
-  - name: 单元与集成测试
-    run: npm test
+  # 本机全自动闭环：单元测试 + 黄金路径端到端 + 安全回归，绿灯才算通过。
+  # 这是「层2·确定性自动化测试」——把它做硬，是将来敢开 auto-merge 的前提。
+  - name: 闭环测试
+    run: bash scripts/loop-test.sh
     required: true
-  - name: 类型检查
-    run: npm run typecheck
-    required: true
-  - name: 文档链接与 frontmatter 校验
-    run: npm run lint:docs
-    required: false
 
 mainBranch: main
 

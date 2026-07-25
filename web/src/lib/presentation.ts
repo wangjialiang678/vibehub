@@ -73,3 +73,7 @@ export function evidenceLabel(level: string | null | undefined): string {
 export function postLoginPath(role: string | null | undefined): '/app' | '/admin' {
   return role === 'teacher' || role === 'admin' ? '/admin' : '/app';
 }
+
+export function getProjectPollInterval({ visible, diagnosis }: { visible: boolean; diagnosis?: { status?: string; stale?: boolean } | null }): number | false {
+  return visible && (diagnosis?.status === 'running' || diagnosis?.stale === true) ? 3000 : false;
+}

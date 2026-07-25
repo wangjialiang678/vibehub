@@ -30,6 +30,7 @@ export interface DiagnosisItem {
 export interface Diagnosis {
   id: string;
   status?: string;
+  stale?: boolean;
   score?: number | null;
   items: DiagnosisItem[];
   summary?: string | null;
@@ -75,6 +76,27 @@ export interface ReviewQueueItem {
 export interface ReviewsResponse {
   items: ReviewQueueItem[];
   counts: { pending?: number; published?: number };
+}
+
+export interface CampOverview {
+  camp: { id: string; name: string; slug: string; kind: string };
+  counts: {
+    members: number; invites_bound: number; invites_total: number; projects: number;
+    not_started: number; developing: number; needs_revision: number; pending_review: number; published: number;
+  };
+  stale: Array<{ id: string; title: string; owner: string; updated_at?: string | null }>;
+  recent: Array<{ id: string; title: string; owner: string; dev_status?: string | null; publish_status?: string | null; updated_at?: string | null }>;
+}
+
+export interface CampProject {
+  id: string; title: string; owner_name: string; owner_username?: string; updated_at?: string | null;
+  dev_status?: string | null; publish_status?: string | null; pending_version_id?: string | null;
+}
+
+export interface InviteListItem {
+  code_masked: string; status: 'unused' | 'bound' | 'revoked' | string; role: 'student' | 'teacher' | string;
+  max_devices: number; devices: number; created_at?: string | null; bound_at?: string | null;
+  bound_user?: string | null; bound_project?: string | null;
 }
 
 export interface ReviewDetail {

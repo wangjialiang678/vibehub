@@ -50,3 +50,4 @@ docs/research/prototype/bundle/
 # 前端构建
 web/dist/
 web/node_modules/
+.devloop/

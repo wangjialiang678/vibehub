@@ -5,12 +5,14 @@ import { Link } from 'react-router-dom';
 import { api, readableError } from '../lib/api';
 import { AppShell, ModeTabs } from '../components/Shell';
 import { LoginRequired, PageState, PreviewFrame, StatusPill, copyToClipboard, useQrCode } from '../components/Ui';
-import { evidenceLabel, formatDateTime, formatNumber, getDiagnosisState, getProjectStatus } from '../lib/presentation';
+import { evidenceLabel, formatDateTime, formatNumber, getDiagnosisState, getProjectPollInterval, getProjectStatus } from '../lib/presentation';
+import { usePageVisibility } from '../lib/pageVisibility';
 import type { DiagnosisItem, ProjectSnapshot } from '../lib/types';
 
 export function StudentPage() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, retry: false });
-  const project = useQuery({ queryKey: ['project', me.data?.project_id], queryFn: () => api.project(me.data!.project_id!), enabled: Boolean(me.data?.project_id), retry: false });
+  const pageVisible = usePageVisibility();
+  const project = useQuery({ queryKey: ['project', me.data?.project_id], queryFn: () => api.project(me.data!.project_id!), enabled: Boolean(me.data?.project_id), retry: false, refetchInterval: (query) => getProjectPollInterval({ visible: pageVisible, diagnosis: (query.state.data as ProjectSnapshot | undefined)?.latest_diagnosis }) });
   if (me.isPending) return <PageState />;
   if (me.isError) return <LoginRequired />;
   if (!me.data.project_id) return <NoProject campSlug={me.data.camp.slug} />;

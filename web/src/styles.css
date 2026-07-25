@@ -218,6 +218,66 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .detail-empty p { margin-top: 8px; font-size: 13px; }
 .action-message { padding: 9px 12px; margin: -8px 0 15px; border-radius: 7px; color: var(--success); background: #edf6ef; font-size: 13px; }
 .admin-notice { margin: -19px 0 18px; }
+.teacher-content { width: min(1420px, 100%); }
+.teacher-heading-actions { display: flex; align-items: center; gap: 12px; }
+.overview-metrics { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; margin-bottom: 20px; }
+.overview-metric { min-height: 126px; padding: 19px 17px; display: flex; flex-direction: column; justify-content: space-between; }
+.overview-metric strong { font: 37px/1 Georgia, "Songti SC", serif; letter-spacing: -.06em; }
+.overview-metric > span { color: var(--ink-soft); font-size: 12px; }
+.teacher-two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.teacher-list-panel { min-width: 0; overflow: hidden; }
+.teacher-list-panel > header, .invite-reveal > header, .invite-table > header, .project-board > header { min-height: 104px; padding: 23px 25px 19px; display: flex; align-items: start; justify-content: space-between; gap: 15px; border-bottom: 1px solid var(--line); }
+.teacher-list-panel > header h2, .invite-reveal h2, .invite-table h2, .project-board h2 { margin-top: 8px; font-size: 21px; letter-spacing: -.035em; }
+.teacher-list-panel > header > span, .invite-reveal > header > span, .invite-table > header > span { color: var(--ink-soft); font-size: 12px; }
+.teacher-project-list, .project-directory ul { margin: 0; padding: 0; list-style: none; }
+.teacher-project-list li { min-height: 82px; padding: 16px 22px 16px 25px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid var(--line); }
+.teacher-project-list li:first-child { border-top: 0; }
+.teacher-project-list li > div { min-width: 0; }
+.teacher-project-list strong, .teacher-project-list span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.teacher-project-list strong { font-size: 14px; }
+.teacher-project-list span { margin-top: 6px; color: var(--ink-soft); font-size: 12px; }
+.activity-link { flex: 0 0 auto; }
+.teacher-empty { min-height: 180px; padding: 44px 24px; display: grid; place-items: center; align-content: center; color: var(--ink-soft); text-align: center; }
+.teacher-empty strong { color: var(--ink); font-size: 14px; }
+.teacher-empty p { margin-top: 8px; font-size: 12px; line-height: 1.55; }
+.projects-workspace { display: grid; grid-template-columns: minmax(0, 1fr); }
+.projects-workspace.has-selected { grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr); gap: 20px; }
+.project-directory { overflow: hidden; }
+.project-directory li + li { border-top: 1px solid var(--line); }
+.project-directory li > a { min-height: 81px; padding: 17px 22px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.project-directory li.is-current > a { background: #fff5f1; box-shadow: inset 3px 0 0 var(--coral); }
+.project-directory li div { min-width: 0; }
+.project-directory strong, .project-directory span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-directory strong { font-size: 15px; }
+.project-directory span { margin-top: 7px; color: var(--ink-soft); font-size: 12px; }
+.project-board { min-width: 0; overflow: hidden; }
+.teacher-project-preview { width: calc(100% - 50px); height: 390px; margin: 25px; display: block; border: 1px solid var(--line-strong); border-radius: 9px; background: #fff; }
+.project-board-meta { margin: 0 25px 26px; padding-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); }
+.project-board-meta > div { padding: 0 15px; border-left: 1px solid var(--line); }
+.project-board-meta > div:first-child { padding-left: 0; border-left: 0; }
+.project-board-meta dt { color: var(--ink-soft); font-size: 11px; }
+.project-board-meta dd { margin-top: 8px; font-size: 13px; font-weight: 700; }
+.invite-layout { display: grid; grid-template-columns: minmax(240px, .45fr) minmax(0, 1.55fr); gap: 20px; align-items: start; }
+.invite-main { min-width: 0; display: grid; gap: 20px; }
+.invite-create { padding: 25px; }
+.invite-create h2 { margin: 9px 0 26px; font-size: 23px; letter-spacing: -.04em; }
+.invite-create label { display: block; margin: 19px 0 8px; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.invite-create input, .invite-create select { width: 100%; min-height: 43px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 7px; outline: 0; color: var(--ink); background: #fff; font-size: 14px; }
+.invite-create input:focus, .invite-create select:focus { border-color: var(--coral); box-shadow: 0 0 0 3px var(--coral-soft); }
+.invite-create .button { margin-top: 26px; }
+.invite-reveal { padding-bottom: 20px; }
+.invite-reveal pre { min-height: 100px; max-height: 220px; overflow: auto; margin: 19px 25px; padding: 16px; border: 1px dashed #efad9f; border-radius: 8px; color: #893e31; background: #fff5f1; font: 13px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+.invite-reveal > div:last-child { padding: 0 25px; display: flex; gap: 10px; }
+.invite-table { overflow: hidden; }
+.invite-table > header { min-height: 91px; align-items: center; padding-top: 19px; padding-bottom: 17px; }
+.table-scroll { overflow-x: auto; }
+.invite-table table { width: 100%; min-width: 710px; border-collapse: collapse; text-align: left; }
+.invite-table th { padding: 11px 18px; color: #96928b; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 11px; font-weight: 700; }
+.invite-table td { padding: 15px 18px; vertical-align: middle; border-bottom: 1px solid var(--line); color: var(--ink-soft); font-size: 12px; }
+.invite-table td b, .invite-table td small { display: block; }
+.invite-table td b { color: var(--ink); font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.invite-table td small { margin-top: 5px; color: #99938b; }
+.button-danger { color: var(--coral-deep); }
 .modal-backdrop { position: fixed; z-index: 30; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(36, 35, 33, .35); }
 .reject-modal { position: relative; width: min(470px, 100%); padding: 31px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: 0 20px 60px rgba(0,0,0,.18); }
 .reject-modal h2 { margin: 10px 0 8px; font-size: 24px; }
@@ -308,6 +368,8 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .review-detail-head { display: block; }
   .diagnosis-summary-strip { margin-top: 18px; }
   .collection-page { width: min(100% - 40px, 1400px); }
+  .overview-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .invite-layout { grid-template-columns: minmax(220px, .55fr) minmax(0, 1.45fr); }
 }
 
 @media (max-width: 820px) {
@@ -333,6 +395,8 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .review-detail { min-height: 560px; }
   .review-detail-head { display: block; }
   .admin-preview { height: 390px; }
+  .teacher-two-columns, .projects-workspace.has-selected, .invite-layout { grid-template-columns: 1fr; }
+  .overview-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .collection-nav { grid-template-columns: 1fr auto; }
   .collection-links { display: none; }
   .collection-nav .mode-tabs { transform: scale(.82); transform-origin: right center; }
@@ -373,6 +437,12 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .review-actions { align-items: stretch; flex-direction: column; }
   .review-actions > div { width: 100%; }
   .review-actions .button { min-width: 0; flex: 1; padding: 0 8px; }
+  .teacher-heading-actions { align-items: stretch; flex-direction: column; }
+  .teacher-heading-actions .mode-tabs { display: none; }
+  .teacher-project-preview { width: calc(100% - 38px); height: 310px; margin: 19px; }
+  .project-board-meta { margin: 0 19px 20px; grid-template-columns: 1fr; gap: 14px; }
+  .project-board-meta > div, .project-board-meta > div:first-child { padding: 0; border-left: 0; }
+  .invite-create { padding: 21px; }
   .collection-page { width: min(100% - 28px, 1400px); }
   .collection-nav .mode-tabs { display: none; }
   .collection-hero { padding: 48px 0; }
