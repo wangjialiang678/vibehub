@@ -9,6 +9,23 @@ export class UnpackError extends Error {
 }
 
 const BANNED_EXT = new Set(['.sh', '.bash', '.zsh', '.exe', '.dll', '.so', '.dylib', '.bin', '.app', '.command']);
+const SENSITIVE_DIRS = new Set(['.git', '.aws', '.ssh']);
+const SENSITIVE_EXACT = new Set(['.env', '.npmrc', 'credentials.json']);
+const SENSITIVE_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.log']);
+
+/** 敏感凭证和本地配置绝不能进入公开版本产物。 */
+export function isSensitiveArtifactPath(path) {
+  const parts = String(path).split('/').filter(Boolean);
+  return parts.some((part) => {
+    const name = part.toLowerCase();
+    return SENSITIVE_DIRS.has(name)
+      || SENSITIVE_EXACT.has(name)
+      || name.startsWith('.env.')
+      || name.startsWith('id_rsa')
+      || name.startsWith('id_ed25519')
+      || SENSITIVE_EXTENSIONS.has(extname(name));
+  });
+}
 
 /**
  * 安全解包学员上传的 tar.gz。
@@ -19,54 +36,74 @@ export async function safeExtract(tgzPath, destDir) {
   let totalBytes = 0;
   let fileCount = 0;
   const rejected = [];
+  let dangerousEntry = null;
+  let limitError = null;
 
   await tar.x({
     file: tgzPath,
     cwd: destDir,
     strip: 0,
+    maxDecompressionRatio: 100,
     // node-tar 默认就会剥掉绝对路径与 ..，这里再显式拦一道并记录
     preservePaths: false,
     filter: (path, entry) => {
-      // 只要普通文件和目录，symlink / hardlink / 设备文件一律拒绝（防逃逸）
+      if (limitError) return false;
+      // 链接、设备和可执行项是危险内容：不能只跳过后让整包继续成功。
       if (entry.type !== 'File' && entry.type !== 'Directory') {
-        rejected.push({ path, reason: `不支持的条目类型 ${entry.type}` });
+        dangerousEntry ||= { path, kind: '特殊条目' };
         return false;
       }
       if (path.startsWith('/') || path.includes('..')) {
         rejected.push({ path, reason: '路径不合法' });
         return false;
       }
-      // 跳过打包时应该被排除但漏网的目录
-      if (/(^|\/)(node_modules|\.git)(\/|$)/.test(path)) return false;
       // macOS 的 tar 会给每个文件附带一份 AppleDouble（`._xxx`）存扩展属性，
       // 还有 .DS_Store 和 __MACOSX/。这些对网页毫无意义，会污染文件数统计。
       if (/(^|\/)(\._[^/]*|\.DS_Store)$/.test(path)) return false;
       if (/(^|\/)__MACOSX(\/|$)/.test(path)) return false;
+      if (isSensitiveArtifactPath(path)) {
+        rejected.push({ path, reason: '敏感文件不允许上传' });
+        return false;
+      }
+      // node_modules 是体积噪音；.git 已在敏感文件检查中记录为 rejected。
+      if (/(^|\/)node_modules(\/|$)/.test(path)) return false;
+      if (entry.type === 'File' && (BANNED_EXT.has(extname(path).toLowerCase()) || (Number(entry.mode) & 0o111))) {
+        dangerousEntry ||= { path, kind: '可执行文件' };
+        return false;
+      }
+
+      // 目录也会耗尽 inode 与解包时间；上限按所有实际接收条目计数。
+      fileCount += 1;
+      if (fileCount > LIMITS.fileCount) {
+        limitError = new UnpackError('too_many_files', `文件数超过 ${LIMITS.fileCount} 个上限`,
+          '检查一下是不是把 node_modules 之类的目录打进去了');
+        return false;
+      }
 
       if (entry.type === 'File') {
         if (entry.size > LIMITS.singleFileBytes) {
-          throw new UnpackError('file_too_large',
+          limitError = new UnpackError('file_too_large',
             `文件 ${path} 超过 ${Math.round(LIMITS.singleFileBytes / 1024 / 1024)} MB 的单文件上限`,
             '大的图片、音频、视频建议用平台的文件上传接口，不要打进网页包里');
-        }
-        if (BANNED_EXT.has(extname(path).toLowerCase())) {
-          rejected.push({ path, reason: '可执行文件不允许上传' });
           return false;
         }
         totalBytes += entry.size;
-        fileCount += 1;
         if (totalBytes > LIMITS.unpackedBytes) {
-          throw new UnpackError('bundle_too_large', '解压后的内容太大了',
+          limitError = new UnpackError('bundle_too_large', '解压后的内容太大了',
             '把大文件挪出网页目录，或用平台的文件上传接口');
-        }
-        if (fileCount > LIMITS.fileCount) {
-          throw new UnpackError('too_many_files', `文件数超过 ${LIMITS.fileCount} 个上限`,
-            '检查一下是不是把 node_modules 之类的目录打进去了');
+          return false;
         }
       }
       return true;
     },
   });
+
+  if (dangerousEntry) {
+    const executable = dangerousEntry.kind === '可执行文件';
+    throw new UnpackError('bundle_invalid', `内容包包含${dangerousEntry.kind}：${dangerousEntry.path}`,
+      executable ? '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件' : '请删除符号链接、设备文件或其他特殊文件后重新提交');
+  }
+  if (limitError) throw limitError;
 
   return { totalBytes, fileCount, rejected };
 }

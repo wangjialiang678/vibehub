@@ -7,9 +7,11 @@ audience: tech
 
 # VibeHub 架构设计
 
+> ⚠️ **同步提示**：本文部分早期章节描述子域名方案，已被 `decisions-r1.md` 否决为路径式；以 `decisions-r1.md` 和实际实现为准。
+
 > 本文回答需求文档 §15「当前文档暂不定义」的那七件事——它们恰好是能不能开营的关键。
 >
-> **前置假设**：本文按第 1 轮决策的**推荐选项**书写（静态 + 平台数据能力 / 子域名 / 邀请码即身份 / 服务端诊断 / 昵称公开 / 分阶段接 VibeLoop / Node）。凡是依赖决策的地方都用 `〔决策 N〕` 标注，决策改变时只需改动这些段落。
+> **前置假设**：本文按第 1 轮决策的**已拍板选项**书写（静态 + 平台数据能力 / 路径式网址 + `hub` 独立控制台 origin / 邀请码即身份 / 服务端诊断 / 昵称公开 / 分阶段接 VibeLoop / Node）。凡是依赖决策的地方都用 `〔决策 N〕` 标注，决策改变时只需改动这些段落。
 >
 > 配套阅读：[领域模型与状态机](domain-model.md) · [基础设施事实](../research/infra-facts.md) · [存量资产盘点](../research/codebase/existing-assets.md)
 
@@ -27,10 +29,11 @@ audience: tech
 ┌──────────────▼─────────────────────────────────────────┐
 │  南京机（supermind-ai.cn 已备案）                        │
 │                                                         │
-│  nginx ─┬─ console.<域>      平台控制台（React SPA）     │
-│         ├─ api.<域>          VibeHub 服务（Node/Fastify）│
-│         ├─ <slug>.works.<域> 学员作品（静态，正式版）     │
-│         └─ p-<pid>.works.<域> 版本预览（不可猜 id）       │
+│  nginx ─┬─ supermind-ai.cn/vibehub/<user>/<project>/      │
+│         │                         学员作品（静态，正式版）│
+│         ├─ supermind-ai.cn/vibehub/_preview/<pid>/       │
+│         │                         版本预览（不可猜 id）  │
+│         └─ hub.supermind-ai.cn   控制台 + API（独立 origin）│
 │                                                         │
 │  VibeHub 服务                                           │
 │    ├─ 提交接收 → 校验 → 解包 → 版本落盘                  │
@@ -57,23 +60,23 @@ audience: tech
 
 学员的产物是**纯静态文件**（HTML/CSS/JS/图片）。需要存数据时，不写后端，而是调用平台提供的一组带项目作用域的接口。
 
-平台在每个作品页自动注入一个 SDK（`<script src="/_vibehub/sdk.js">`，由 nginx 在作品域下提供）：
+平台在每个作品页自动注入一个 SDK（生产路径为 `/vibehub/_sdk/vibehub.js`）：
 
 ```javascript
 // 学员的 AI 只需要写这样的代码
 await vibehub.save('sounds', { title: '早高峰的路口', lat: 31.2, lng: 121.4 });
 const list = await vibehub.list('sounds', { limit: 20 });
 const url  = await vibehub.upload(fileBlob);          // 返回可直接用的公开 URL
-const text = await vibehub.ai('把这段描述润色一下：' + input);
+const text = await vibehub.ai('把这段描述润色一下：' + input); // 【规划中，当前未实现】
 ```
 
-对应四组服务端接口（全部按项目作用域隔离，**项目身份由作品域名的 Host 推导，不依赖前端传参**，理由见 §2.1b）：
+对应三组已实现能力和一组规划能力。项目身份的规范来源是作品正式版或预览版的 **URL 路径**，不是 Host；服务端不得把客户端自报的 header 或 project id 当作授权依据（当前实现中的 header 只能视为非可信路径线索，见 §2.1b）：
 
 | 能力 | 接口 | 配额（每项目） |
 |---|---|---|
 | 结构化数据 | `POST/GET/DELETE /baas/v1/:collection` | 10 万条 · 单条 64 KB |
 | 文件上传 | `POST /baas/v1/files` | 500 MB 总量 · 单文件 20 MB |
-| AI 调用 | `POST /baas/v1/ai` | 每日 200 次，走模型网关（含安全过滤） |
+| AI 调用 | `POST /baas/v1/ai` | 【规划中，当前未实现】每日 200 次，走模型网关（含安全过滤） |
 | 计数器 | `POST /baas/v1/counter/:key` | 无限 |
 
 **为什么是这四个**：从原型里六个作品倒推——城市声音地图（文件+数据+位置）、情绪天气站（数据+时序）、无障碍菜单（数据+AI 朗读文本）、专注岛（计数器）、记忆拼图（文件+数据）、光合日记（数据）。**四个能力覆盖全部六个作品**，没有一个需要自定义后端。
@@ -85,10 +88,12 @@ const text = await vibehub.ai('把这段描述润色一下：' + input);
 > **浏览器里的「项目标识」只能是可公开的路由标识，不能当成密钥。** 任何写进静态产物的东西都等于公开。
 
 真正的保护来自服务端，而不是"把 key 藏在前端"：
-- 项目身份由**作品域名的 Host 推导**（`voice-map.works.…` → project），不依赖前端传参
+- 项目身份来自 `/vibehub/<username>/<project>/` 或 `/vibehub/_preview/<pid>/` 的路径映射，不由 Host 推导；服务端不得信任客户端自报的 project header。当前 SDK 会发送 `x-vibehub-project` 路径线索，当前 BaaS 实现按该 header 优先、`Referer` 兜底解析；两者都可由客户端伪造，因此不是安全边界
 - 每项目的配额、限流、单条大小、内容过滤全在服务端强制
 - 上游模型 API key **永不下发**，AI 调用一律经平台网关中转
 - 需要"只有作者能写"的作品，走**服务端签发的短期会话**，而不是硬编码 token
+
+> **同源威胁模型（路径式的关键代价）**：一句话：**作品之间共享同一 origin，SDK 命名空间不是安全边界。** 所有正式作品、预览和主站路径共享 `https://supermind-ai.cn` 这一个 origin。作品之间的 `localStorage`、`IndexedDB` 和浏览器权限是共享的；SDK 的 `vh:` 命名空间只是约定，不是安全边界。任何作品里的 JavaScript 都可能绕过 SDK，直接读取或修改同源存储、调用同源接口，因此不能把作品之间当成已经隔离的租户。`hub.supermind-ai.cn` 是独立 origin，只用于把控制台的 host-only 登录 cookie 移出作品执行面，不能解决作品之间的同源风险。
 
 > BaaS 的默认策略是"公开可读、限流可写"——营地场景下作品需要访客能留言/上传，做强鉴权反而做不出想要的作品。代价是数据可能被恶意写入，缓解手段是配额 + 内容过滤 + 老师可一键清空某个 collection。**这条取舍需要第 2 轮跟 Michael 确认**（见 api.md §5）。
 
@@ -121,48 +126,48 @@ Codex 的独立方案主张 **P0 只发静态站，BaaS 放 P1**，以缩小首�
 
 | 用途 | 域名 | 说明 |
 |---|---|---|
-| 平台控制台 | `console.supermind-ai.cn` | 学员看板 + 老师审核台 |
-| 平台 API | `api.supermind-ai.cn` | 也可合并进 console，用 `/api` 前缀 |
-| 作品正式版 | `<slug>.works.supermind-ai.cn` | 如 `voice-map.works.supermind-ai.cn` |
-| 版本预览 | `p-<16位随机>.works.supermind-ai.cn` | 不可猜，带 `X-Robots-Tag: noindex` |
-| 课程集合页 | `console.supermind-ai.cn/c/<camp-slug>` | 或独立 `<camp>.works....` |
+| 学员作品正式版 | `https://supermind-ai.cn/vibehub/<username>/<projectname>/` | 主域路径式地址 |
+| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | 不可猜，带 `X-Robots-Tag: noindex` |
+| 平台控制台 + API | `https://hub.supermind-ai.cn` | 学员看板、老师审核台和 `/api/*`；与作品不同 origin |
+| 课程集合页 | `hub.supermind-ai.cn/c/<camp-slug>` | 控制台内页面；公开数据接口仍为 `/api/public/*` |
 
-**为什么作品要放在 `.works.` 这一层**：把作品与平台隔在不同的子域分支下，配合下面的 cookie 策略，学员作品的 JS 无法读取平台凭证。
+**为什么控制台要放在 `hub`**：路径式作品与主站同源，作品 JavaScript 不能读取 `hub` 的 host-only cookie；但这只是控制面隔离，不代表作品之间已经独立 origin。
 
 ### 3.2 证书
 
-Let's Encrypt 通配证书**必须走 DNS-01 验证**（HTTP-01 不支持通配符）。需要：
-1. 泛解析 DNS 记录 `*.works.supermind-ai.cn` → 南京机，以及 `console` / `api` 两条 A 记录
-2. DNSPod API 凭证给 certbot 的 DNS 插件
-3. `certbot certonly --dns-dnspod -d '*.works.supermind-ai.cn' -d 'console.supermind-ai.cn' ...`
-4. 腾讯云防火墙放行 443
+路径式方案只需要普通证书：为 `supermind-ai.cn`（可包含 `www`）和 `hub.supermind-ai.cn` 配置普通 HTTPS 证书，使用 **HTTP-01** 验证；不需要通配证书、泛解析、DNS-01 或 DNS 服务商 API 凭证。另需腾讯云防火墙放行 443。
 
 > **HTTPS 不是可选项。** 原型里的「城市声音地图」要录音——`getUserMedia` 只在安全上下文（HTTPS）下可用。地理位置、剪贴板等 API 同理。没有 HTTPS，一半的作品做不出来。这一条把 §3.2 从"运维待办"提升为"P0 阻塞项"。
 
-### 3.3 nginx 配置骨架
+### 3.3 nginx 路由骨架
 
 ```nginx
-# 作品正式版：按子域名映射到 sites/<slug>/current
+# 主域：官网 + 路径式作品
 server {
   listen 443 ssl http2;
-  server_name ~^(?<slug>[a-z0-9][a-z0-9-]{1,38})\.works\.supermind-ai\.cn$;
-  root /var/lib/vibehub/sites/$slug/current;
-  index index.html;
-  location = /_vibehub/sdk.js { alias /var/lib/vibehub/runtime/sdk.js; }
-  location /baas/  { proxy_pass http://127.0.0.1:4300; }   # 带上 Host，服务端据此定位项目
-  location / { try_files $uri $uri/ /index.html =404; }
-  add_header Content-Security-Policy "frame-ancestors 'self' https://console.supermind-ai.cn";
+  server_name supermind-ai.cn www.supermind-ai.cn;
+  location ~ ^/vibehub/(?<user>[a-z0-9][a-z0-9_-]*)/(?<project>[a-z0-9][a-z0-9_-]*)(?<rest>/.*)?$ {
+    alias /var/lib/vibehub/sites/$user/$project;
+    try_files $rest $rest/index.html /index.html =404;
+  }
+  location ~ ^/vibehub/_preview/(?<pid>[a-z0-9]{16})(?<rest>/.*)?$ {
+    alias /var/lib/vibehub/previews/$pid;
+    try_files $rest $rest/index.html /index.html =404;
+    add_header X-Robots-Tag "noindex, nofollow" always;
+  }
+  location /baas/ { proxy_pass http://127.0.0.1:4300; }
 }
 
-# 版本预览：不可猜 id，禁止索引
+# 控制台 + API（独立 origin）
 server {
   listen 443 ssl http2;
-  server_name ~^p-(?<pid>[a-z0-9]{16})\.works\.supermind-ai\.cn$;
-  root /var/lib/vibehub/previews/$pid;
-  add_header X-Robots-Tag "noindex, nofollow" always;
-  location / { try_files $uri $uri/ /index.html =404; }
+  server_name hub.supermind-ai.cn;
+  location /api/ { proxy_pass http://127.0.0.1:4300; }
+  location / { try_files $uri $uri/ /index.html; }
 }
 ```
+
+生产配置还将 `/vibehub/_sdk/` 和 `/vibehub/_hit` 回源到 Node；作品静态文件本身由 nginx 直接读取。BaaS 请求的项目路径线索通过请求头透传，但 header 由客户端控制，不能作为安全隔离依据。
 
 `try_files ... /index.html` 让学员写的前端路由（AI 很爱生成 SPA 路由）不会 404。
 
@@ -176,7 +181,7 @@ server {
 /var/lib/vibehub/
 ├── db.sqlite                      # 主库（WAL）
 ├── versions/v_<id>/               # 版本快照，不可变
-├── sites/<slug>/current -> ../../versions/v_<id>/     # 正式版软链
+├── sites/<username>/<project> -> versions/v_<id>/     # 正式版软链，直接指向版本目录
 ├── previews/<pid16>   -> ../versions/v_<id>/          # 预览软链
 ├── uploads/<project_id>/          # BaaS 文件（也可直传 COS）
 ├── runtime/sdk.js                 # 注入作品页的 SDK
@@ -513,7 +518,8 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 
 | 威胁 | 缓解 |
 |---|---|
-| 作品 JS 窃取平台登录凭证 | 平台 cookie 设为 **host-only**（不设 `Domain`）+ `SameSite=Lax`；作品跑在 `*.works.` 分支下，拿不到 `console.` 的 cookie。API 另加 CSRF token |
+| 作品 JS 窃取平台登录凭证 | 平台控制台迁到 `hub.supermind-ai.cn`，cookie 设为 **host-only**（不设 `Domain`）+ `SameSite=Lax`；主域作品拿不到 `hub` 的 cookie。这个措施只隔离控制台，不隔离作品之间的同源存储、IndexedDB 或权限 |
+| 作品伪造项目身份访问 BaaS | 正式/预览 URL 的路径负责映射项目；客户端 header 只是非可信线索，服务端不得把它当作授权。当前实现仍按 `x-vibehub-project` 优先、`Referer` 兜底解析，故 SDK 命名空间和 header 都不是安全边界 |
 | 作品页把平台控制台嵌进 iframe 钓鱼 | 控制台响应加 `X-Frame-Options: DENY`；作品页 CSP 限定 `frame-ancestors` |
 | 压缩包路径穿越 / 炸弹 | §4.3 解包规则 |
 | BaaS 接口被刷 | 按项目配额 + 令牌桶限流 + 单条大小限制 |
@@ -531,11 +537,11 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 ### P0 —— 不做就开不了营
 
 **验收标准（端到端黄金路径，必须一次跑通）**：
-> 老师建课程 → 生成 10 个邀请码 → 学员在 Claude Code 里 `vibehub bind` → 写一个能录音并保存的网页 → `vibehub deploy` → 拿到预览地址 → 老师在审核队列看到它、点开预览、审核通过 → 学员拿到 `xxx.works.supermind-ai.cn` 和二维码 → 手机扫码能打开 → 作品出现在课程集合页
+> 老师建课程 → 生成 10 个邀请码 → 学员在 Claude Code 里 `vibehub bind` → 写一个能录音并保存的网页 → `vibehub deploy` → 拿到预览地址 → 老师在审核队列看到它、点开预览、审核通过 → 学员拿到 `https://supermind-ai.cn/vibehub/<username>/<projectname>/` 和二维码 → 手机扫码能打开 → 作品出现在课程集合页
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 1 | **开 443 + 泛解析 + 通配证书** | 阻塞项，录音等功能的前提 |
+| 1 | **开 443 + 两个主机名的普通证书（HTTP-01）** | 阻塞项，录音等功能的前提；不需要泛解析、通配证书或 DNS-01 |
 | 2 | 数据层 + 五维状态机 | 见 domain-model.md |
 | 3 | 提交/解包/版本落盘/预览 | §4 |
 | 4 | 审核队列 + 原子发布切换 | §4.2 ⑤ |
@@ -569,7 +575,7 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 | # | 待验证 | 影响 | 验证方式 |
 |---|---|---|---|
 | 1 | 南京机归属哪个腾讯云账号 | 决定谁能开 443 | 控制台核对 |
-| 2 | `supermind-ai.cn` DNS 是否托管在 DNSPod | 决定 certbot 用哪个 DNS 插件 | 查 NS 记录 |
+| 2 | `hub.supermind-ai.cn` A 记录是否已生效 | 决定控制台独立 origin 是否可用 | `dig` / HTTPS 实测 |
 | 3 | 备案主体名称与备案号 | 合规存档 | 腾讯云备案控制台 |
 | 4 | umami 是否支持按作品动态建 website | 决定浏览量方案 | 读 umami API 文档 + 实测 |
 | 5 | 模型网关的实际单次成本 | 诊断成本模型 | 接入后实测回填 |

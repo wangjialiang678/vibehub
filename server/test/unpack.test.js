@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -26,29 +26,66 @@ test('正常内容能解开', async () => {
   const res = await safeExtract(tgz, dest);
   assert.ok(existsSync(join(dest, 'index.html')));
   assert.ok(existsSync(join(dest, 'assets', 'a.css')));
-  assert.equal(res.fileCount, 2);
+  assert.equal(res.fileCount, 4);
 });
 
-test('符号链接被拒绝——防止逃逸到版本目录之外', async () => {
+test('含符号链接的归档整体无效——防止逃逸到版本目录之外', async () => {
   const tgz = tarball((d) => {
     writeFileSync(join(d, 'index.html'), 'x');
     symlinkSync('/etc/passwd', join(d, 'evil.txt'));
   });
   const dest = tmp();
-  const res = await safeExtract(tgz, dest);
-  assert.ok(!existsSync(join(dest, 'evil.txt')), '符号链接不该被解出来');
-  assert.ok(res.rejected.some((r) => r.path.includes('evil')), '应记录拒绝原因');
+  await assert.rejects(
+    safeExtract(tgz, dest),
+    (error) => error instanceof UnpackError && error.code === 'bundle_invalid',
+  );
 });
 
-test('可执行文件被拒绝', async () => {
+test('含可执行文件的归档整体无效', async () => {
   const tgz = tarball((d) => {
     writeFileSync(join(d, 'index.html'), 'x');
-    writeFileSync(join(d, 'run.sh'), '#!/bin/sh\necho hi');
+    const executable = join(d, 'tool.js');
+    writeFileSync(executable, 'console.log("x")');
+    chmodSync(executable, 0o755);
+  });
+  const dest = tmp();
+  await assert.rejects(
+    safeExtract(tgz, dest),
+    (error) => error instanceof UnpackError && error.code === 'bundle_invalid',
+  );
+});
+
+test('敏感文件即使被绕过 CLI 打进包也不会落盘，并记录拒绝原因', async () => {
+  const tgz = tarball((d) => {
+    writeFileSync(join(d, 'index.html'), '<main>安全作品</main>');
+    writeFileSync(join(d, '.env'), 'API_KEY=sk-test-secret');
+    mkdirSync(join(d, 'nested'));
+    writeFileSync(join(d, 'nested', '.env.production'), 'TOKEN=secret');
+    writeFileSync(join(d, 'deploy.pem'), '-----BEGIN PRIVATE KEY-----');
+    mkdirSync(join(d, '.git'));
+    writeFileSync(join(d, '.git', 'config'), '[core]');
   });
   const dest = tmp();
   const res = await safeExtract(tgz, dest);
-  assert.ok(!existsSync(join(dest, 'run.sh')));
-  assert.ok(res.rejected.some((r) => r.path.includes('run.sh')));
+  assert.ok(existsSync(join(dest, 'index.html')));
+  assert.ok(!existsSync(join(dest, '.env')));
+  assert.ok(!existsSync(join(dest, 'nested', '.env.production')));
+  assert.ok(!existsSync(join(dest, 'deploy.pem')));
+  assert.ok(!existsSync(join(dest, '.git')));
+  const rejected = res.rejected.filter((item) => item.reason === '敏感文件不允许上传');
+  assert.ok(rejected.length >= 4);
+  assert.ok(rejected.some((item) => item.path.includes('.git')));
+});
+
+test('空目录也计入 5000 条目上限', async () => {
+  const tgz = tarball((d) => {
+    writeFileSync(join(d, 'index.html'), 'x');
+    for (let i = 0; i <= 5000; i += 1) mkdirSync(join(d, `empty-${i}`));
+  });
+  await assert.rejects(
+    safeExtract(tgz, tmp()),
+    (error) => error instanceof UnpackError && error.code === 'too_many_files',
+  );
 });
 
 test('node_modules 不会被解出来', async () => {

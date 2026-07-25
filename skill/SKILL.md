@@ -70,7 +70,6 @@ vibehub open       # 浏览器打开作品
 ```javascript
 await vibehub.save('sounds', { title: '早高峰的路口', lat: 31.2 });  // 存一条
 const items = await vibehub.list('sounds', { limit: 20 });          // 读列表
-await vibehub.remove('sounds', id);                                  // 删一条
 const url = await vibehub.upload(file);                              // 传文件，返回可用地址
 const n = await vibehub.counter('visits');                           // 计数器 +1
 

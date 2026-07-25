@@ -22,6 +22,7 @@ audience: both
 | SSH | 端口 `<非标准端口，见 server-vault>`，非 root 用户 | server-vault |
 | 已监听端口 | **80、8080**（均为 nginx） | `ss -ltnp` |
 | **443** | **未监听** | `ss -ltnp` + `nc -z` 均确认关闭 |
+| 生产 Node 版本 | **待验证是否 ≥ 22**；服务依赖 `node:sqlite`，`server/package.json` 要求 Node `>=22` | 登录生产机执行 `node --version` |
 | certbot | `/usr/bin/certbot` 已安装 | `which certbot` |
 | 现有站点 | `/var/www/sites/` 下 4 个（demo / hello / waic / index.html） | `ls` |
 | nginx 站点配置 | `default`、`nanjing-default`、`supermind-ai` | `ls /etc/nginx/sites-enabled/` |
@@ -42,19 +43,20 @@ audience: both
 
 > 待验证：备案主体名称、备案号、是否为非经营性备案。建议在腾讯云控制台确认后补录此处。
 
-**子域名是否需要单独备案**：不需要。阿里云官方口径为「备案仅针对顶级域名，二级域名及多级域名无法备案；顶级域名备案成功后，对应二级及多级域名访问内地节点服务器无需再备案」。来源：https://developer.aliyun.com/ask/524435 · https://developer.aliyun.com/ask/16233
-
-因此 `<slug>.supermind-ai.cn` 形态的作品网址在合规上成立，**前提是备案接入商与实际承载服务器一致**（当前一致，都是腾讯云）。
+已拍板的作品地址是主域路径式：
+`https://supermind-ai.cn/vibehub/<username>/<projectname>/`；版本预览为
+`https://supermind-ai.cn/vibehub/_preview/<pid16>/`。控制台与 API 使用
+`https://hub.supermind-ai.cn`，这是为保护控制台 cookie 而设置的独立 origin，不是作品的项目隔离边界。
 
 ## 3. 需要开通的运维项（P0 待办）
 
 | 待办 | 说明 | 阻塞点 |
 |---|---|---|
 | 开放 443 端口 | 腾讯云防火墙放行 + nginx 增加 443 server 块 | **<南京机 IP，见 server-vault TC_NANJING_*> 不在本机 `tccli` 默认 profile 与 `lemo` profile 的可见范围内**，需确认该机归属哪个腾讯云账号后在控制台操作 |
-| 申请 `*.supermind-ai.cn` 通配证书 | Let's Encrypt 通配证书必须走 **DNS-01** 验证，需要 DNS 服务商 API 凭证（腾讯云 DNSPod） | 需确认 `supermind-ai.cn` 的 DNS 托管在哪（当前解析生效，需确认是否 DNSPod） |
-| 配置泛解析 `*.supermind-ai.cn` → `<南京机 IP，见 server-vault TC_NANJING_*>` | DNS A 记录 | 同上 |
+| 申请普通证书 | 为 `supermind-ai.cn`（可含 `www`）和 `hub.supermind-ai.cn` 配置普通证书，走 **HTTP-01**；不需要通配证书或 DNS-01 | 443 开通后执行 certbot，80 端口已通 |
+| 配置 `hub.supermind-ai.cn` A 记录 | 指向 `<南京机 IP，见 server-vault TC_NANJING_*>`；作品和预览不需要逐项目 DNS 记录 | 需确认该机归属哪个腾讯云账号后在 DNS 控制台操作 |
 
-> 这三项互相依赖，建议一次性打包处理，预计半天。**在 443 打通前，作品网址只能是 http，不影响功能但影响观感与部分浏览器 API（如地理位置、麦克风录音需要 HTTPS）**——注意原型里的「城市声音地图」要录音，**这意味着 HTTPS 不是可选项而是功能前提**。
+> 这三项是上线前置项。**在 443 打通前，作品网址只能是 http，不影响功能但影响观感与部分浏览器 API（如地理位置、麦克风录音需要 HTTPS）**——注意原型里的「城市声音地图」要录音，**这意味着 HTTPS 不是可选项而是功能前提**。
 
 ## 4. 已有的多租户部署机制（可直接复用）
 
@@ -66,7 +68,7 @@ audience: both
 > 三档账号（admin / static / backend）的具体用户名、端口与密钥路径见 `~/.claude/server-vault.env` 的 `TC_NANJING_*`，本仓库公开，不记录连接参数。
 - **反代包含机制**：`nanjing-default` 站点配置中 `include /etc/nginx/nanjing-apps/*.conf`，新增后端不需要改主配置
 
-VibeHub 的部署管道可以复用这套目录约定与权限机制，但**需要独立的 nginx server 块**（因为要走域名而非 8080 路径）。
+VibeHub 的部署管道可以复用这套目录约定与权限机制，但需要主域路径式作品路由和 `hub.supermind-ai.cn` 的控制台/API server 块；不需要为每个作品配置 DNS 或 server 块。
 
 ## 5. 统计能力
 

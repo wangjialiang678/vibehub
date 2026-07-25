@@ -12,7 +12,7 @@
   function req(method, path, body, isForm) {
     var opts = {
       method: method,
-      headers: { 'x-vibehub-project': here },
+      headers: {},
       credentials: 'omit',
     };
     if (body !== undefined) {
@@ -32,7 +32,7 @@
   // 浏览量信标。生产环境 nginx 直接 serve 作品静态文件、不经过后端，
   // 所以必须由页面主动上报一次，否则浏览量永远是 0。
   // 只在正式作品页统计，预览不算（老师反复预览不该刷学员的数据）。
-  if (here.indexOf('/_preview/') === -1) {
+  if (window.top === window.self && here.indexOf('/_preview/') === -1) {
     try {
       var payload = JSON.stringify({ path: here });
       if (navigator.sendBeacon) {
@@ -50,10 +50,6 @@
     list: function (collection, opts) {
       var q = opts && opts.limit ? '?limit=' + Number(opts.limit) : '';
       return req('GET', '/' + encodeURIComponent(collection) + q).then(function (d) { return d.items || []; });
-    },
-    /** 删一条 */
-    remove: function (collection, id) {
-      return req('DELETE', '/' + encodeURIComponent(collection) + '/' + encodeURIComponent(id));
     },
     /** 上传文件，返回可直接用在 <img src> / <audio src> 的地址 */
     upload: function (file) {

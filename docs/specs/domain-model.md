@@ -118,7 +118,7 @@ CREATE TABLE projects (
 );
 ```
 
-> `slug` 的全局唯一性取决于 URL 方案（子域名需全局唯一，路径式只需课程内唯一）——见"决策 2"。表结构上先按课程内唯一约束，全局唯一时额外加一张 `reserved_slugs` 表做占位。
+> 作品正式地址由 `supermind-ai.cn/vibehub/<username>/<slug>/` 生成。当前表结构按课程内约束 `UNIQUE (camp_id, slug)`，URL 中同时包含用户名和作品 slug；项目身份不应按 Host 推导。
 
 ### 1.5 versions — 版本（内容快照）
 
@@ -282,21 +282,21 @@ running ──▶ healthy | needs_work | blocked | failed
 
 ### 2.6 版本发布的原子切换
 
-审核通过时的动作序列（必须在一个事务 + 一次原子文件操作内完成）：
+审核通过时，当前实现先更新审核状态，再原子切换正式作品软链，最后更新项目状态和部署记录。文件切换必须使用临时软链 + `rename`，不能先删后建：
 
 ```
-BEGIN;
-  UPDATE reviews SET status='approved', reviewer_id=?, decided_at=? WHERE id=?;
-  UPDATE projects SET live_version_id=?, pending_version_id=NULL,
-                      publish_status='published', updated_at=? WHERE id=?;
-  INSERT INTO deployments (version_id, target='live', status='deploying');
-COMMIT;
--- 然后：原子切换文件系统符号链接
-ln -sfn versions/<new_id>/ sites/<slug>/current.tmp && mv -T sites/<slug>/current.tmp sites/<slug>/current
-  UPDATE deployments SET status='ready', url=?, finished_at=?;
+UPDATE reviews SET status='approved', reviewer_id=?, comment=?, decided_at=?
+  WHERE id=? AND status='pending';
+-- publishVersion：target = versions/<new_id>/
+mkdir -p sites/<username>/;
+ln -s versions/<new_id>/ sites/<username>/<project>.tmp-<pid>-<timestamp>;
+rename sites/<username>/<project>.tmp-<pid>-<timestamp> sites/<username>/<project>;
+UPDATE projects SET live_version_id=?, pending_version_id=NULL,
+                    publish_status='published', updated_at=? WHERE id=?;
+INSERT INTO deployments (version_id, target='live', status='ready', url=NULL);
 ```
 
-用 `ln -sfn` + `mv -T` 而不是 `rm && ln`，保证任意时刻访客要么看到旧版要么看到新版，**不会看到 404**。
+`sites/<username>/<project>` 本身就是指向 `versions/<new_id>/` 的软链，没有 `current` 子链接。`rename` 在同一文件系统上原子替换，保证任意时刻访客要么看到旧版要么看到新版，**不会看到 404**。
 
 ---
 
@@ -331,7 +331,7 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 | "城市声音地图" + "等待审核" 徽章 | `projects.title` + 由 `reviews.status` 派生 |
 | "v1.2.0 · 今天 10:35 更新" | `versions.label` + `submitted_at` |
 | 「现在的项目长这样」预览 | `deployments(target=preview).url` |
-| 「你的网页」`voice-map.vibe.page` + 二维码 | 由 `projects.slug` 生成 |
+| 「你的网页」`https://supermind-ai.cn/vibehub/<username>/voice-map/` + 二维码 | 由用户名和 `projects.slug` 生成 |
 | 「上线后的表现」1,284 / 186 / 94 / +18% | umami API，按 `umami_website_id` |
 | 「开发完成度 86%」 | `diagnoses.score` |
 | 「客户端/前端 100%」「服务端 72%」 | `diagnoses.dimensions` |

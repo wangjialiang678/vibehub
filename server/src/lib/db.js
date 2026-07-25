@@ -85,10 +85,12 @@ CREATE TABLE IF NOT EXISTS versions (
   bundle_size INTEGER NOT NULL,
   file_count INTEGER NOT NULL DEFAULT 0,
   rewrites TEXT,                      -- JSON：解包时做过的绝对路径重写，学员可见
+  rejected TEXT,                      -- JSON：解包时拦下的敏感文件，供诊断给出 blocker
   preview_id TEXT NOT NULL UNIQUE,
   submitted_by TEXT NOT NULL REFERENCES users(id),
   submitted_via TEXT NOT NULL DEFAULT 'skill',
   submitted_at TEXT NOT NULL,
+  artifact_pruned INTEGER NOT NULL DEFAULT 0,
   UNIQUE (project_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_versions_project ON versions(project_id, seq DESC);
@@ -126,6 +128,8 @@ CREATE TABLE IF NOT EXISTS diagnoses (
   summary TEXT,
   next_steps TEXT,                    -- JSON
   model TEXT,
+  model_items TEXT,                   -- JSON：模型仅翻译出的结论，不参与评分
+  model_attempted_at TEXT,            -- 每日模型结论额度按尝试预留，失败也不能绕过
   created_at TEXT NOT NULL, finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_diag_version ON diagnoses(version_id, created_at DESC);
@@ -190,6 +194,32 @@ CREATE TABLE IF NOT EXISTS page_views (
   views INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (project_id, day)
 );
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  camp_id TEXT REFERENCES camps(id),
+  actor_user_id TEXT REFERENCES users(id),
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT,
+  detail TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_camp ON audit_logs(camp_id, created_at DESC);
 `);
+
+// 本地第一版已经可能有数据；SQLite 的 CREATE TABLE 不会补列，所以在启动时做
+// 幂等迁移，避免升级后旧库直接报错。
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+ensureColumn('versions', 'artifact_pruned', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('diagnoses', 'model_items', 'TEXT');
+ensureColumn('diagnoses', 'model_attempted_at', 'TEXT');
+ensureColumn('versions', 'rejected', 'TEXT');
+ensureColumn('projects', 'collection_order', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('projects', 'collection_recommended', 'INTEGER NOT NULL DEFAULT 0');
 
 export const now = () => new Date().toISOString();

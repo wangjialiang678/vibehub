@@ -16,6 +16,11 @@ export const CONSOLE_ORIGIN = env.VIBEHUB_CONSOLE_ORIGIN || `http://localhost:51
 export const WORKS_ORIGIN = env.VIBEHUB_WORKS_ORIGIN || `http://localhost:${PORT}`;
 export const WORKS_PREFIX = env.VIBEHUB_WORKS_PREFIX || '/vibehub';
 
+// 模型网关使用营地中台已经提供的 OpenAI 兼容接口。token 只从运行环境读取，
+// 未配置时诊断仍会以模板文案交付，不能因为模型故障卡住学员提交。
+export const MODEL_GATEWAY_URL = env.VIBEHUB_MODEL_GATEWAY_URL || `http://127.0.0.1:${env.HUB_PORT || 4100}`;
+export const MODEL_GATEWAY_TOKEN = env.VIBEHUB_MODEL_GATEWAY_TOKEN || '';
+
 export const paths = {
   versions: `${DATA_DIR}/versions`,
   sites: `${DATA_DIR}/sites`,
@@ -31,9 +36,16 @@ export const LIMITS = {
   singleFileBytes: 20 * 1024 * 1024,
   baasRecordBytes: 64 * 1024,
   baasRecordsPerProject: 100_000,
+  baasRecordBytesPerProject: 32 * 1024 * 1024,
+  baasCollectionsPerProject: 100,
+  baasCounterKeysPerProject: 100,
   baasFileBytes: 20 * 1024 * 1024,
   baasBytesPerProject: 500 * 1024 * 1024,
   diagnosisPerDay: 20,
+  projectDiskBytes: Number(env.VIBEHUB_PROJECT_DISK_BYTES || 200 * 1024 * 1024),
+  probeTimeoutMs: 15_000,
+  probeReadBytes: 2 * 1024 * 1024,
+  probeResources: 100,
 };
 
 export const worksUrl = (username, slug) =>

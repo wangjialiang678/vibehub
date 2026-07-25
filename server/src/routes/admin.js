@@ -1,8 +1,9 @@
 import { nanoid, customAlphabet } from 'nanoid';
 import { db, now } from '../lib/db.js';
-import { authRequired, isTeacher, revokeTokensForInvite } from '../lib/auth.js';
-import { publishVersion } from '../services/publish.js';
+import { authRequired, assertProjectAccess, isTeacher, revokeTokensForInvite } from '../lib/auth.js';
+import { publishVersion, suspendSite } from '../services/publish.js';
 import { projectSnapshot, versionView, diagnosisView } from './_shared.js';
+import { pruneProjectArtifacts } from '../services/storage.js';
 
 // 邀请码去掉易混字符 0/O/1/I/L
 const codeGen = customAlphabet('ABCDEFGHJKMNPQRSTUVWXYZ23456789', 4);
@@ -103,6 +104,22 @@ export default async function adminRoutes(app) {
     };
   });
 
+  app.get('/api/camps/:campId/invites/export', { preHandler: teacherOnly }, async (req, reply) => {
+    if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
+    const rows = db.prepare(`SELECT code,role,status,max_devices,expires_at,created_at FROM invites
+                             WHERE camp_id=? ORDER BY created_at DESC`).all(req.params.campId);
+    const quote = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const csv = ['邀请码,角色,状态,设备上限,过期时间,创建时间', ...rows.map((row) =>
+      [row.code, row.role, row.status, row.max_devices, row.expires_at, row.created_at].map(quote).join(','))].join('\r\n');
+    db.prepare(`INSERT INTO audit_logs (id,camp_id,actor_user_id,action,target_type,target_id,detail,created_at)
+                VALUES (?,?,?,?,?,?,?,?)`)
+      .run('audit_' + nanoid(12), req.params.campId, req.auth.user_id, 'invite_export', 'camp', req.params.campId,
+        JSON.stringify({ count: rows.length }), now());
+    return reply.header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', 'attachment; filename="vibehub-invites.csv"')
+      .send(`\uFEFF${csv}`);
+  });
+
   app.post('/api/invites/:code/revoke', { preHandler: teacherOnly }, async (req, reply) => {
     const inv = db.prepare('SELECT * FROM invites WHERE code=?').get(req.params.code);
     if (!inv || inv.camp_id !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个邀请码。');
@@ -158,6 +175,10 @@ export default async function adminRoutes(app) {
   app.post('/api/reviews/:id/approve', { preHandler: teacherOnly }, async (req, reply) => {
     const r = db.prepare('SELECT * FROM reviews WHERE id=?').get(req.params.id);
     if (!r || r.camp_id !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这条审核记录。');
+    const diagnosis = diagnosisView(r.version_id);
+    if (diagnosis?.status === 'blocked') {
+      return err(reply, 'diagnosis_blocked', 409, '这个版本有必须先修复的问题，暂时不能发布。', '请让学员按诊断提示修改后重新提交');
+    }
     // 乐观锁：重复点击不会二次发布
     const changed = db.prepare(`UPDATE reviews SET status='approved', reviewer_id=?, comment=?, decided_at=?
                                 WHERE id=? AND status='pending'`)
@@ -174,6 +195,7 @@ export default async function adminRoutes(app) {
     db.prepare(`INSERT INTO deployments (id,version_id,target,status,url,started_at,finished_at)
                 VALUES (?,?,?,?,?,?,?)`)
       .run('dp_' + nanoid(10), r.version_id, 'live', 'ready', null, now(), now());
+    pruneProjectArtifacts(p.id);
 
     return { ok: true, message: '已发布，作品网址现在指向这个版本。' };
   });
@@ -192,6 +214,60 @@ export default async function adminRoutes(app) {
     db.prepare(`UPDATE projects SET pending_version_id=NULL, dev_status='needs_revision',
                 publish_status = CASE WHEN live_version_id IS NULL THEN 'unpublished' ELSE 'published' END,
                 updated_at=? WHERE id=?`).run(now(), r.project_id);
+    pruneProjectArtifacts(r.project_id);
     return { ok: true, message: '已退回，学员会看到你的修改意见。线上旧版本不受影响。' };
+  });
+
+  // ── 项目管理：这些接口只影响已发布作品的对外呈现，不改变版本历史。 ──
+  app.post('/api/projects/:id/suspend', { preHandler: teacherOnly }, async (req, reply) => {
+    const project = db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
+    if (!assertProjectAccess(project, req.auth)) return err(reply, 'not_found', 404, '找不到这个项目。');
+    if (!project.live_version_id) return err(reply, 'not_published', 400, '这个项目还没有正式发布，暂时不能下线。', '先审核通过一个版本后再操作');
+    const owner = db.prepare('SELECT username FROM users WHERE id=?').get(project.owner_user_id);
+    suspendSite({ username: owner.username, slug: project.slug });
+    db.prepare(`UPDATE projects SET publish_status='suspended',updated_at=? WHERE id=?`).run(now(), project.id);
+    return { ok: true, message: '作品已下线，访客会看到说明页面。' };
+  });
+
+  app.post('/api/projects/:id/resume', { preHandler: teacherOnly }, async (req, reply) => {
+    const project = db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
+    if (!assertProjectAccess(project, req.auth)) return err(reply, 'not_found', 404, '找不到这个项目。');
+    if (!project.live_version_id) return err(reply, 'not_published', 400, '这个项目还没有正式发布，暂时不能恢复。', '先审核通过一个版本后再操作');
+    const owner = db.prepare('SELECT username FROM users WHERE id=?').get(project.owner_user_id);
+    publishVersion({ username: owner.username, slug: project.slug, versionId: project.live_version_id });
+    db.prepare(`UPDATE projects SET publish_status='published',updated_at=? WHERE id=?`).run(now(), project.id);
+    return { ok: true, message: '作品已恢复公开访问。' };
+  });
+
+  app.patch('/api/projects/:id/visibility', { preHandler: teacherOnly }, async (req, reply) => {
+    const project = db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
+    if (!assertProjectAccess(project, req.auth)) return err(reply, 'not_found', 404, '找不到这个项目。');
+    const visibility = req.body?.visibility;
+    if (visibility !== null && !['nickname', 'realname', 'camp_only'].includes(visibility)) {
+      return err(reply, 'invalid_visibility', 400, '可见性设置不正确。', '可选 nickname、realname、camp_only，或传 null 恢复课程默认值');
+    }
+    db.prepare('UPDATE projects SET visibility=?,updated_at=? WHERE id=?').run(visibility, now(), project.id);
+    return { ok: true, visibility, message: visibility === null ? '已恢复课程默认可见性。' : '作品可见性已更新。' };
+  });
+
+  app.post('/api/camps/:campId/collection', { preHandler: teacherOnly }, async (req, reply) => {
+    if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
+    const items = req.body?.items;
+    if (!Array.isArray(items)) return err(reply, 'invalid_collection', 400, '集合页排序数据格式不正确。', '传入 items 数组，每项包含 project_id、order 和 recommended');
+    try {
+      db.exec('BEGIN');
+      for (const [index, item] of items.entries()) {
+        const project = db.prepare('SELECT id FROM projects WHERE id=? AND camp_id=?').get(item?.project_id, req.params.campId);
+        if (!project) throw new Error('invalid_project');
+        const order = Number.isInteger(item.order) ? item.order : index;
+        db.prepare(`UPDATE projects SET collection_order=?,collection_recommended=?,updated_at=? WHERE id=?`)
+          .run(order, item.recommended ? 1 : 0, now(), project.id);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 未开启事务时无需回滚 */ }
+      return err(reply, 'invalid_collection', 400, '集合页里包含不属于本课程的作品。', '只传入当前课程下的项目 ID');
+    }
+    return { ok: true, updated: items.length, message: '集合页排序和推荐位已保存。' };
   });
 }

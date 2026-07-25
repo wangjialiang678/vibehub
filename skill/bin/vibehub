@@ -42,7 +42,27 @@ async function api(path, { method = 'GET', body, token, form } = {}) {
 }
 
 // ── 打包 ─────────────────────────────────────────────────────────────
-const IGNORE = new Set(['node_modules', '.git', '.DS_Store', 'dist.tgz', '.vibehub', 'venv', '__pycache__', '.venv']);
+const IGNORE = new Set([
+  'node_modules', '.git', '.DS_Store', 'dist.tgz', '.vibehub', 'venv', '__pycache__', '.venv',
+  '.env', '.env.*', '*.pem', '*.key', 'id_rsa*', 'id_ed25519*', '*.pfx', '*.p12',
+  'credentials.json', '.npmrc', '*.log', '.aws', '.ssh',
+]);
+
+function isIgnoredName(name, ignore = IGNORE) {
+  const lower = name.toLowerCase();
+  return ignore.has(name)
+    || lower === '.env'
+    || lower.startsWith('.env.')
+    || lower.endsWith('.pem')
+    || lower.endsWith('.key')
+    || lower.startsWith('id_rsa')
+    || lower.startsWith('id_ed25519')
+    || lower.endsWith('.pfx')
+    || lower.endsWith('.p12')
+    || lower.endsWith('.log')
+    || lower === 'credentials.json'
+    || lower === '.npmrc';
+}
 
 function readIgnoreFile(dir) {
   const f = join(dir, '.vibehubignore');
@@ -82,7 +102,7 @@ function countFiles(dir, ignore = IGNORE) {
   let n = 0;
   const walk = (d) => {
     for (const name of readdirSync(d)) {
-      if (ignore.has(name)) continue;
+      if (isIgnoredName(name, ignore)) continue;
       const p = join(d, name);
       const st = statSync(p);
       if (st.isDirectory()) walk(p); else n += 1;
@@ -180,9 +200,12 @@ const cmds = {
     say(`\n${c.g}✓${c.x} ${data.label} 已提交`);
     say(`  预览  ${c.b}${data.preview_url}${c.x}`);
     if (data.rewrites) say(`  ${c.d}自动修正了 ${data.rewrites} 处绝对路径引用（作品跑在子目录下）${c.x}`);
-    if (data.diagnosis) {
-      say(`  完成度 ${c.bold}${data.diagnosis.score}%${c.x} — ${data.diagnosis.summary}`);
+    if (Number.isFinite(data.diagnosis?.score)) {
+      const conclusion = data.diagnosis.summary ? ` — ${data.diagnosis.summary}` : '';
+      say(`  完成度 ${c.bold}${data.diagnosis.score}%${c.x}${conclusion}`);
       (data.diagnosis.next_steps || []).forEach((n) => say(`    ${c.d}·${c.x} ${n}`));
+    } else {
+      say(`  ${c.d}正在做诊断，稍后用 vibehub status 查看${c.x}`);
     }
     say(`\n${data.message}`);
   },

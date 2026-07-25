@@ -1,5 +1,6 @@
 import { db } from '../lib/db.js';
 import { worksUrl, previewUrl } from '../lib/config.js';
+import { projectDiskUsage } from '../services/storage.js';
 
 const j = (s, d = null) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
@@ -23,6 +24,8 @@ export function diagnosisView(versionId) {
     id: d.id, version_id: d.version_id, status: d.status, score: d.score,
     policy_version: d.policy_version,
     items,
+    facts: j(d.facts, {}),
+    model_items: j(d.model_items, []),
     // 分数可复算：把分母也给出去，前端能自己加一遍
     applicable_earned: items.filter((i) => i.applicability === 'applicable').reduce((s, i) => s + i.earned_points, 0),
     applicable_max: items.filter((i) => i.applicability === 'applicable').reduce((s, i) => s + i.max_points, 0),
@@ -30,6 +33,13 @@ export function diagnosisView(versionId) {
     summary: d.summary, next_steps: j(d.next_steps, []),
     finished_at: d.finished_at,
   };
+}
+
+function latestCompletedDiagnosis(projectId) {
+  const row = db.prepare(`SELECT d.version_id FROM diagnoses d JOIN versions v ON v.id=d.version_id
+                          WHERE v.project_id=? AND d.status <> 'running'
+                          ORDER BY d.created_at DESC LIMIT 1`).get(projectId);
+  return row ? diagnosisView(row.version_id) : null;
 }
 
 export function projectSnapshot(projectId) {
@@ -43,6 +53,12 @@ export function projectSnapshot(projectId) {
   const views = db.prepare('SELECT COALESCE(SUM(views),0) AS n FROM page_views WHERE project_id=?').get(projectId);
   const todayViews = db.prepare(`SELECT COALESCE(views,0) AS n FROM page_views WHERE project_id=? AND day=date('now')`).get(projectId);
 
+  const pendingDiagnosis = pending ? diagnosisView(pending.id) : null;
+  const diagnosisRunning = pendingDiagnosis?.status === 'running';
+  const latestDiagnosis = diagnosisRunning
+    ? { ...(latestCompletedDiagnosis(projectId) || pendingDiagnosis), stale: true, pending_version_id: pending.id }
+    : pendingDiagnosis || (live ? diagnosisView(live.id) : null);
+
   return {
     project: {
       id: p.id, slug: p.slug, title: p.title, tagline: p.tagline, category: p.category,
@@ -55,12 +71,13 @@ export function projectSnapshot(projectId) {
     camp: { id: camp.id, slug: camp.slug, name: camp.name, kind: camp.kind },
     live_version: versionView(live),
     pending_version: versionView(pending),
-    latest_diagnosis: diagnosisView(pending?.id || live?.id || ''),
+    latest_diagnosis: latestDiagnosis,
     last_review: lastReview ? {
       status: lastReview.status, comment: lastReview.comment,
       decided_at: lastReview.decided_at, version_id: lastReview.version_id,
     } : null,
     stats: { total_views: Number(views?.n || 0), today_views: Number(todayViews?.n || 0) },
+    storage: projectDiskUsage(projectId),
     timeline: timeline(projectId),
   };
 }

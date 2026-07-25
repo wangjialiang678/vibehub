@@ -8,7 +8,7 @@ audience: tech
 # API 契约
 
 约定：
-- 基址 `https://console.supermind-ai.cn/api`（BaaS 除外，见 §5）
+- 控制台/API 基址 `https://hub.supermind-ai.cn/api`（BaaS 除外，见 §5）
 - 全部 `application/json`（上传除外）
 - 时间一律 ISO 8601 UTC 字符串
 - 错误体：`{ "error": { "code": "invite_already_bound", "message": "这个邀请码已经被使用了", "hint": "找老师要一个新的" } }`
@@ -23,7 +23,7 @@ audience: tech
 |---|---|---|
 | 网页用户（学员/老师） | 会话 cookie（**host-only、SameSite=Lax、HttpOnly、Secure**） | 浏览器 |
 | AI 工具（skill） | `Authorization: Bearer <token>` | `~/.vibehub/credentials.json` |
-| 学员作品运行时 | 由作品域名 Host 推导 project + 服务端签发的 project key | SDK 自动携带 |
+| 学员作品运行时 | 由作品 URL 路径映射 project；作品不持有密钥 | SDK 发送路径线索，服务端负责校验 |
 
 **铁律**：服务端一切鉴权只认凭证内嵌的 `scope{camp_id, project_id, role}`，**绝不接受客户端自报的 camp_id / project_id 参数**。请求里出现的 camp/project 参数只用于校验「是否与 scope 一致」，不一致即 403。
 
@@ -43,7 +43,7 @@ audience: tech
   "user":    { "id":"u_..", "display_name":"张路" },
   "camp":    { "id":"c_..", "name":"AI 产品共创课", "slug":"ai-product-2026s" },
   "project": { "id":"p_..", "slug":"voice-map", "title":"城市声音地图" },
-  "endpoints": { "api":"https://console.supermind-ai.cn/api", "works_domain":"works.supermind-ai.cn" }
+  "message": "已连接到《AI 产品共创课》，你的作品：城市声音地图"
 }
 ```
 错误：`invite_not_found` · `invite_revoked` · `invite_expired` · `invite_device_limit`（已绑满 `max_devices` 台设备）
@@ -54,8 +54,8 @@ audience: tech
 ```jsonc
 {
   "project": { "id","slug","title","dev_status","publish_status","live_url" },
-  "live_version":    { "id","label","published_at" },
-  "pending_version": { "id","label","submitted_at","review_status","preview_url" },
+  "live_version":    { "id","label","seq","submitted_at","preview_url" },
+  "pending_version": { "id","label","seq","submitted_at","preview_url" },
   "latest_diagnosis":{ "version_id","status","score","summary","next_steps":[..],"finished_at" },
   "last_review":     { "status","comment","decided_at" }   // 驳回原因在这里
 }
@@ -77,9 +77,9 @@ audience: tech
 // meta
 { "label":"v1.2.0", "summary":"新增声音上传与地图筛选", "flows":["上传声音","查看地图"] }
 // ←  201
-{ "version_id":"v_..", "seq":7, "preview_url":"https://p-a1b2c3d4e5f6g7h8.works.supermind-ai.cn",
+{ "version_id":"v_..", "seq":7, "preview_url":"https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/",
   "deployment":{"status":"ready"}, "diagnosis":{"status":"running"},
-  "review":{"status":"pending"},
+  "review":{"status":"waiting_for_diagnosis"},
   "message":"已生成预览版本，正在做 AI 诊断，随后会自动进入老师的审核队列" }
 ```
 错误：`bundle_too_large` · `bundle_invalid`（解包失败/含危险条目）· `missing_index_html` · `rate_limited`
@@ -172,19 +172,31 @@ audience: tech
 
 ## 5. BaaS 端（学员作品运行时调用）〔决策 1〕
 
-基址：作品自己的域名下的 `/baas/v1/*`，由 nginx 反代到平台。**项目身份由 Host 推导**，作品不需要也拿不到任何密钥。
+基址：主域作品路径下的 `/baas/v1/*`，由 nginx 反代到平台。正式作品使用
+`https://supermind-ai.cn/vibehub/<username>/<projectname>/`，预览使用
+`https://supermind-ai.cn/vibehub/_preview/<pid16>/`。项目身份来自 URL 路径映射，不由 Host 推导；作品不需要也拿不到任何密钥。
+
+SDK 当前发送 `x-vibehub-project` 路径线索，服务端当前按该 header 优先、`Referer` 兜底解析。两者都是客户端可控请求头，**不是授权凭证或安全边界**；服务端不得信任客户端自报的 project header/id。
+
+### 当前已实现
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | `POST` | `/baas/v1/:collection` | 存一条数据，返回 `{id, created_at}` |
-| `GET` | `/baas/v1/:collection` | 列表，支持 `?limit=&cursor=&order=` |
-| `GET` | `/baas/v1/:collection/:id` | 单条 |
+| `GET` | `/baas/v1/:collection` | 列表，支持 `?limit=`，上限 200 |
 | `DELETE` | `/baas/v1/:collection/:id` | 删除 |
-| `POST` | `/baas/v1/files` | 上传文件（multipart），返回公开 URL |
-| `POST` | `/baas/v1/ai` | `{prompt, max_tokens?}` → 走模型网关（含安全过滤） |
+| `POST` | `/baas/v1/files` | 上传文件（multipart），返回文件 URL 字段；文件读取见下方规划接口 |
 | `POST` | `/baas/v1/counter/:key` | 原子自增，返回新值 |
 
-配额与限流（每项目）：数据 10 万条 · 单条 64 KB · 文件总量 500 MB · 单文件 20 MB · AI 每日 200 次 · 全局 60 req/min 令牌桶。超限返回 429 且 `message` 是人话（"这个作品今天的 AI 调用次数用完了，明天会重置"）。
+### 规划中（当前未实现）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/baas/v1/:collection/:id` | **【规划中，当前未实现】** 单条读取 |
+| `GET` | `/baas/v1/files/...` | **【规划中，当前未实现】** 文件读取 |
+| `POST` | `/baas/v1/ai` | **【规划中，当前未实现】** `{prompt, max_tokens?}` → 计划走模型网关（含安全过滤） |
+
+配额与限流（每项目）：数据 10 万条 · 单条 64 KB · 文件总量 500 MB · 单文件 20 MB · 每项目 60 req/min 令牌桶。AI 配额属于规划接口，当前不能调用。超限返回 429 且 `message` 是人话。
 
 **BaaS 数据默认公开可读**（作品是公开网页，读操作没有身份），写操作同样开放但受限流与大小约束。这是刻意的取舍：营地场景下作品需要"任何访客都能留言/上传"，做鉴权反而做不出想要的作品。**代价是数据可能被恶意写入**，缓解手段是配额、内容过滤和老师可一键清空某个 collection。
 

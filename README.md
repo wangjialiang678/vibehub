@@ -25,6 +25,18 @@
 原型（乐乐老师）：https://vibehub.preview.aliyun-zeabur.cn/ — `#student` / `#admin` / `#collection`
 截图与文案已存档在 [docs/research/prototype/](docs/research/prototype/)。
 
+## 本地前端
+
+前端在 `web/`，采用 React 18 + Vite + TypeScript 和手写 CSS；不使用 UI 组件库。后端已运行在本机时，可这样启动：
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+开发服务器会通过同源代理转发到默认后端 `http://127.0.0.1:4300`，以保留 host-only 会话 cookie；用 `VITE_API_BASE` 可覆盖代理目标。部署时该变量指定浏览器请求的 API 地址。页面入口为 `/app`、`/admin`、`/c/:campSlug` 和 `/login`。
+
 ## 核心设计要点
 
 - **学员作品是纯静态站 + 平台托管的数据能力**（存数据 / 传文件 / 调 AI），学员不写后端、不碰服务器、不持有任何密钥

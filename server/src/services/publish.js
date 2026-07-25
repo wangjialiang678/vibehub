@@ -1,4 +1,4 @@
-import { mkdirSync, symlinkSync, renameSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, symlinkSync, renameSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { paths } from '../lib/config.js';
 
@@ -32,4 +32,15 @@ export function publishVersion({ username, slug, versionId }) {
 
 export function makePreview({ previewId, versionId }) {
   pointTo(previewLink(previewId), versionDir(versionId));
+}
+
+/** 生产由 nginx 直接读取 sites/，因此下线时切换到受控提示页而不是依赖 Node 返回 404。 */
+export function suspendSite({ username, slug }) {
+  const pageDir = join(paths.sites, '_system', 'suspended');
+  mkdirSync(pageDir, { recursive: true });
+  const index = join(pageDir, 'index.html');
+  if (!existsSync(index)) {
+    writeFileSync(index, '<!doctype html><meta charset="utf-8"><title>作品暂时下线</title><main style="max-width:36rem;margin:12vh auto;font:16px system-ui;line-height:1.7"><h1>这个作品暂时下线了</h1><p>老师正在处理内容或更新，稍后再来看看。</p></main>');
+  }
+  pointTo(siteLink(username, slug), pageDir);
 }

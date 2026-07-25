@@ -15,8 +15,8 @@ audience: tech
 | # | 事项 | 为什么阻塞 | 状态 |
 |---|---|---|---|
 | 1 | **开放 443 端口** | 录音 `getUserMedia`、定位等浏览器 API 只在 HTTPS 下可用。原型的旗舰作品「城市声音地图」要录音——**没有 HTTPS，一半作品做不出来** | ⬜ 待办。需先确认南京机归属哪个腾讯云账号（不在本机 `tccli` 默认与 `lemo` profile 可见范围内） |
-| 2 | 申请证书 | 同上 | ⬜ 路径式方案**不需要通配证书**，HTTP-01 即可（80 已通） |
-| 3 | 加 `hub` 子域 A 记录 | 控制台必须与作品不同源 | ⬜ 一条 A 记录，主域已备案，子域无需单独备案 |
+| 2 | 申请普通证书 | 同上 | ⬜ 为 `supermind-ai.cn`（可含 `www`）和 `hub.supermind-ai.cn` 配置普通证书，HTTP-01 即可（80 已通）；不需要通配证书或 DNS-01 |
+| 3 | 配置 `hub.supermind-ai.cn` A 记录 | 控制台必须与作品不同 origin | ⬜ 一条 A 记录，指向同一台机器 |
 | 4 | 落实投诉与下架负责人 | 作品挂在已备案主体下，内容责任在超脑 | ⬜ 这是运营缺口，产品设计替代不了一个具体的人 |
 
 ```bash
@@ -151,5 +151,6 @@ cd /opt/vibehub && git checkout <上一个好版本>   # 或从备份目录恢�
 sudo systemctl start vibehub
 ```
 
-作品本身不需要回滚——`sites/<user>/<project>/current` 是软链，
-把它指回上一个 `versions/<id>/` 即可，秒级生效且无 404 窗口。
+作品本身不需要回滚——`sites/<user>/<project>` 本身就是直接指向
+`versions/<id>/` 的软链。用同样的临时软链 + 原子 `rename` 指回上一个版本，
+秒级生效且无 404 窗口；不存在 `current` 子链接。
