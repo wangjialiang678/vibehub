@@ -27,12 +27,17 @@ sudo certbot --nginx -d supermind-ai.cn -d www.supermind-ai.cn -d hub.supermind-
 ## 1. 目录与权限
 
 ```bash
-sudo mkdir -p /var/lib/vibehub/{versions,sites,previews,uploads,tmp}
+sudo mkdir -p /var/lib/vibehub/{versions,sites,previews,uploads,tmp,backup}
 sudo mkdir -p /var/www/vibehub-console
+sudo mkdir -p /opt/vibehub-releases              # 每次部署一个带时间戳的 release，回滚靠它
 sudo useradd -r -s /usr/sbin/nologin vibehub || true
-sudo chown -R vibehub:vibehub /var/lib/vibehub
+sudo chown -R vibehub:vibehub /var/lib/vibehub /opt/vibehub-releases
 sudo chmod 755 /var/lib/vibehub                 # nginx 要能读作品文件
 ```
+
+> **生产环境已核实（2026-07-25 SSH 预检）**：Node `v22.23.1`（满足 node:sqlite 所需 ≥22）、
+> npm 10.9.8、磁盘 79G 用 12%、certbot 2.9.0、pm2 已装、nginx `supermind-ai` 站点在（主域 root `/var/www/supermind`）。
+> **唯一硬阻塞：443 未监听**——需在腾讯云控制台放行防火墙 443（先确认南京机归属哪个账号）。
 
 > **诊断用的无头浏览器要用另一个更低权限的用户跑**（见 architecture.md §5.3b）：
 > 不给它 DB、SSH key、云凭证的读权限；15 秒硬超时；禁止访问内网段与 `169.254.169.254`。
@@ -41,16 +46,20 @@ sudo chmod 755 /var/lib/vibehub                 # nginx 要能读作品文件
 ## 2. 部署服务端
 
 ```bash
-# 本机推代码（排除运行时数据）
+# 每次部署推到一个带时间戳的 release 目录，/opt/vibehub 软链指向当前 release —— 回滚只需改软链
+REL=/opt/vibehub-releases/$(date +%Y%m%d-%H%M%S)
 rsync -az --delete \
   --exclude node_modules --exclude .git --exclude 'test' \
   -e "ssh -p <端口> -i <密钥>" \
-  ./server/ <账号>@<南京机>:/opt/vibehub/
+  ./server/ <账号>@<南京机>:"$REL"/
 
 # 服务器上
-cd /opt/vibehub && npm ci --omit=dev
-sudo -u vibehub VIBEHUB_DATA_DIR=/var/lib/vibehub node src/seed.js   # 只跑一次
+cd "$REL" && npm ci --omit=dev
+sudo ln -sfn "$REL" /opt/vibehub.tmp && sudo mv -Tf /opt/vibehub.tmp /opt/vibehub   # 原子切换
+sudo -u vibehub VIBEHUB_DATA_DIR=/var/lib/vibehub node /opt/vibehub/src/seed.js   # 只跑一次（首次部署）
 ```
+
+> systemd 的 `WorkingDirectory=/opt/vibehub`（软链）不变，`ExecStart` 始终跑当前 release。
 
 `/etc/systemd/system/vibehub.service`：
 
@@ -145,9 +154,19 @@ sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".backup /var/lib/vibehub/bac
 
 ## 7. 回滚
 
+代码回滚 = 把 `/opt/vibehub` 软链指回上一个 release（部署机上不放 `.git`，别用 git checkout）：
+
+```bash
+ls -dt /opt/vibehub-releases/*/ | head -3          # 看有哪些 release，第 2 个通常是上一版
+PREV=/opt/vibehub-releases/<上一个时间戳>
+sudo ln -sfn "$PREV" /opt/vibehub.tmp && sudo mv -Tf /opt/vibehub.tmp /opt/vibehub
+sudo systemctl restart vibehub && systemctl is-active vibehub
+```
+
+数据库回滚（如需）从每日备份恢复：
 ```bash
 sudo systemctl stop vibehub
-cd /opt/vibehub && git checkout <上一个好版本>   # 或从备份目录恢复
+sudo -u vibehub cp /var/lib/vibehub/backup/db-<日期>.sqlite /var/lib/vibehub/db.sqlite
 sudo systemctl start vibehub
 ```
 

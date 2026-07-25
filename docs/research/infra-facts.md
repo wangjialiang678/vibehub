@@ -21,8 +21,8 @@ audience: both
 | 负载 | `0.00 0.00 0.00`，开机 11 天，**几乎空载** | `uptime` |
 | SSH | 端口 `<非标准端口，见 server-vault>`，非 root 用户 | server-vault |
 | 已监听端口 | **80、8080**（均为 nginx） | `ss -ltnp` |
-| **443** | **未监听** | `ss -ltnp` + `nc -z` 均确认关闭 |
-| 生产 Node 版本 | **待验证是否 ≥ 22**；服务依赖 `node:sqlite`，`server/package.json` 要求 Node `>=22` | 登录生产机执行 `node --version` |
+| **443** | **未监听**（部署唯一硬阻塞，需控制台开防火墙） | `ss -ltnp`（2026-07-25 复核仍关闭） |
+| 生产 Node 版本 | **v22.23.1**（满足 node:sqlite 所需 ≥22） | SSH `node --version`（2026-07-25 预检） |
 | certbot | `/usr/bin/certbot` 已安装 | `which certbot` |
 | 现有站点 | `/var/www/sites/` 下 4 个（demo / hello / waic / index.html） | `ls` |
 | nginx 站点配置 | `default`、`nanjing-default`、`supermind-ai` | `ls /etc/nginx/sites-enabled/` |
