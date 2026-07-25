@@ -3,18 +3,11 @@ import { Link } from 'react-router-dom';
 
 type SidebarIconName = 'home' | 'folder' | 'history' | 'book';
 
-const navItems: Array<{ label: string; icon: SidebarIconName }> = [
-  { label: '概览', icon: 'home' },
-  { label: '我的项目', icon: 'folder' },
-  { label: '提交记录', icon: 'history' },
-  { label: '作品集合', icon: 'book' },
-];
-
 export function AppShell({ children, active, role, campSlug = 'ai-product-2026s', avatar = 'V' }: { children: ReactNode; active: string; role: 'student' | 'teacher'; campSlug?: string; avatar?: string }) {
   const activeLabel = active;
   const desktopNav: Array<{ label: string; icon: SidebarIconName; to?: string }> = role === 'teacher'
     ? [{ label: '总览', to: '/admin/overview', icon: 'home' }, { label: '项目', to: '/admin/projects', icon: 'folder' }, { label: '审核', to: '/admin', icon: 'history' }, { label: '集合页', to: `/c/${campSlug}`, icon: 'book' }]
-    : navItems;
+    : [{ label: '概览', to: '/app', icon: 'home' }, { label: '我的项目', to: '/app', icon: 'folder' }, { label: '提交记录', to: '/app/versions', icon: 'history' }, { label: '作品集合', to: `/c/${campSlug}`, icon: 'book' }];
   return (
     <div className="dashboard-layout">
       <aside className="side-nav">

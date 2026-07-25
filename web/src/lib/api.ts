@@ -1,4 +1,4 @@
-import type { CampCollection, CampOverview, CampProject, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse } from './types';
+import type { CampCollection, CampOverview, CampProject, CollectionUpdate, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse, VersionsResponse } from './types';
 
 // 开发期始终经 Vite 同源代理访问后端，避免 host-only 会话 cookie 在 localhost 与 127.0.0.1 之间丢失。
 // VITE_API_BASE 在开发期只配置代理目标；部署时才作为浏览器实际请求的 API 域名。
@@ -43,12 +43,14 @@ function parseInviteCodes(csv: string, maskedCode: string) {
 export const api = {
   me: () => request<MeResponse>('/api/me'),
   project: (id: string) => request<ProjectSnapshot>(`/api/projects/${encodeURIComponent(id)}`),
+  versions: (id: string) => request<VersionsResponse>(`/api/projects/${encodeURIComponent(id)}/versions`),
   reviews: () => request<ReviewsResponse>('/api/reviews?status=pending'),
   review: (id: string) => request<ReviewDetail>(`/api/reviews/${encodeURIComponent(id)}`),
   approve: (id: string) => request<{ ok: boolean; message: string }>(`/api/reviews/${encodeURIComponent(id)}/approve`, { method: 'POST', body: JSON.stringify({}) }),
   reject: (id: string, comment: string) => request<{ ok: boolean; message: string }>(`/api/reviews/${encodeURIComponent(id)}/reject`, { method: 'POST', body: JSON.stringify({ comment }) }),
   overview: (campId: string) => request<CampOverview>(`/api/camps/${encodeURIComponent(campId)}/overview`),
   projects: (campId: string) => request<{ items: CampProject[] }>(`/api/camps/${encodeURIComponent(campId)}/projects`),
+  updateCollection: (campId: string, items: CollectionUpdate[]) => request<{ ok: boolean; updated: number; message: string }>(`/api/camps/${encodeURIComponent(campId)}/collection`, { method: 'POST', body: JSON.stringify({ items }) }),
   invites: (campId: string) => request<{ items: InviteListItem[] }>(`/api/camps/${encodeURIComponent(campId)}/invites`),
   createInvites: (campId: string, input: { count: number; role: 'student' | 'teacher'; max_devices: number }) => request<{ codes: string[]; message: string }>(`/api/camps/${encodeURIComponent(campId)}/invites`, { method: 'POST', body: JSON.stringify(input) }),
   exportInvites: (campId: string) => requestBlob(`/api/camps/${encodeURIComponent(campId)}/invites/export`),

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as presentation from './lib/presentation';
+import { getCollectionUpdates } from './pages/AdminProjectsPage';
 
 const readSource = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
@@ -60,5 +61,39 @@ describe('老师端 P0 功能', () => {
     expect(student).toContain('开发完成度');
     expect(review).toContain('title="开发完成度"');
     expect(review).toContain('验证覆盖率');
+  });
+
+  it('connects student submission history and teacher collection controls to existing APIs', () => {
+    const app = readSource('./App.tsx');
+    const shell = readSource('./components/Shell.tsx');
+    const api = readSource('./lib/api.ts');
+    const projects = readSource('./pages/AdminProjectsPage.tsx');
+    const collection = readSource('./pages/CollectionPage.tsx');
+
+    expect(app).toContain('path="/app/versions"');
+    expect(shell).toContain("{ label: '提交记录', to: '/app/versions'");
+    expect(api).toContain('versions: (id: string)');
+    expect(api).toContain('updateCollection: (campId: string, items:');
+    expect(projects).toContain('集合页编排');
+    expect(projects).toContain('设为推荐');
+    expect(projects).toContain('上移');
+    expect(projects).toContain('下移');
+    expect(collection).toContain('item.featured');
+  });
+
+  it('persists both projects when two adjacent collection positions are swapped', () => {
+    const before = [
+      { id: 'project-a', title: 'A', owner_name: '甲', collection_order: 0, collection_recommended: false },
+      { id: 'project-b', title: 'B', owner_name: '乙', collection_order: 1, collection_recommended: false },
+    ];
+    const after = [
+      { ...before[1], collection_order: 0 },
+      { ...before[0], collection_order: 1 },
+    ];
+
+    expect(getCollectionUpdates(before, after)).toEqual([
+      { project_id: 'project-b', order: 0, recommended: false },
+      { project_id: 'project-a', order: 1, recommended: false },
+    ]);
   });
 });

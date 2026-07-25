@@ -583,6 +583,29 @@ test('跨课程老师不能修改或查看其他课程项目的版本', async ()
   assert.equal(versions.statusCode, 404);
 });
 
+test('学员提交记录按版本倒序返回审核状态、退回意见和诊断完成度', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const statuses = ['pending', 'approved', 'rejected', 'superseded'];
+  for (const [index, status] of statuses.entries()) {
+    const version = addVersion(student.project.id, student.user.id, index + 1);
+    db.prepare('UPDATE versions SET summary=? WHERE id=?').run(`第 ${index + 1} 次更新说明`, version.id);
+    const reviewId = addReview({ versionId: version.id, projectId: student.project.id, campId: camp.id, status });
+    if (status === 'rejected') db.prepare('UPDATE reviews SET comment=? WHERE id=?').run('请补充操作说明', reviewId);
+    if (status === 'approved') {
+      db.prepare(`INSERT INTO diagnoses (id,version_id,status,score,policy_version,facts,items,summary,created_at,finished_at)
+                  VALUES (?,?,?,?,?,?,?,?,?,?)`).run(nextId('d'), version.id, 'healthy', 0, 'test', '{}', JSON.stringify([{ applicability: 'applicable', earned_points: 15, max_points: 20 }]), '完成', now(), now());
+    }
+  }
+
+  const response = await app.inject({ method: 'GET', url: `/api/projects/${student.project.id}/versions`, headers: { authorization: `Bearer ${student.token}` } });
+
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual(response.json().items.map((item) => item.review?.status), ['superseded', 'rejected', 'approved', 'pending']);
+  assert.equal(response.json().items[1].review.comment, '请补充操作说明');
+  assert.equal(response.json().items[2].diagnosis_score, 75);
+});
+
 test('cookie 鉴权的写请求拒绝错误 Origin，但 Bearer 请求不受 CSRF 校验影响', async () => {
   const camp = createCamp();
   const student = await bindStudent(camp.id);
@@ -798,6 +821,29 @@ test('公开端白名单不泄露真实姓名、诊断、审核或邀请码', as
   assert.ok(!body.includes('内部诊断'));
   assert.ok(!body.includes('review'));
   assert.ok(!body.includes('invite'));
+});
+
+test('公开集合将推荐作品置顶，并且只白名单返回推荐标记', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const first = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const second = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const featured = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const firstVersion = addVersion(first.id, owner.id, 1);
+  const secondVersion = addVersion(second.id, owner.id, 1);
+  const featuredVersion = addVersion(featured.id, owner.id, 1);
+  db.prepare("UPDATE projects SET live_version_id=?,collection_order=?,collection_recommended=? WHERE id=?").run(firstVersion.id, 20, 0, first.id);
+  db.prepare("UPDATE projects SET live_version_id=?,collection_order=?,collection_recommended=? WHERE id=?").run(secondVersion.id, 10, 0, second.id);
+  db.prepare("UPDATE projects SET live_version_id=?,collection_order=?,collection_recommended=? WHERE id=?").run(featuredVersion.id, 99, 1, featured.id);
+
+  const result = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.json().items.map((item) => ({ slug: item.slug, featured: item.featured })), [
+    { slug: featured.slug, featured: true },
+    { slug: second.slug, featured: false },
+    { slug: first.slug, featured: false },
+  ]);
 });
 
 test('camp_only 可见性的课程，公开端返回 404', async () => {

@@ -14,6 +14,8 @@ export type ProjectStatusLike = {
   last_review?: { status?: string | null } | null;
 };
 
+export type StatusTone = 'success' | 'warning' | 'danger' | 'muted' | 'blue';
+
 export function formatNumber(value: number | null | undefined): string {
   return new Intl.NumberFormat('zh-CN').format(Number.isFinite(value) ? Number(value) : 0);
 }
@@ -73,6 +75,19 @@ export function getProjectStatus(project: ProjectStatusLike): { label: string; t
   if (project.pending_version) return { label: '等待审核', tone: 'warning' };
   if (project.publish_status === 'published' || project.publish_status === 'published_with_pending') return { label: '已正式上线', tone: 'success' };
   return { label: '还没有正式上线', tone: 'muted' };
+}
+
+export function getVersionReviewStatus(status?: string | null): { label: string; tone: StatusTone } {
+  if (status === 'pending') return { label: '待审核', tone: 'warning' };
+  if (status === 'approved') return { label: '已通过', tone: 'success' };
+  if (status === 'rejected') return { label: '已退回', tone: 'danger' };
+  if (status === 'superseded') return { label: '已被后续提交替代', tone: 'muted' };
+  return { label: '尚未进入审核', tone: 'blue' };
+}
+
+export function getVersionHistoryPollInterval({ visible, reviewStatuses }: { visible: boolean; reviewStatuses: Array<string | null | undefined> }): number | false {
+  // 只在有版本真正处于 pending 审核时轮询；空 status（blocker 版本无 review，属终态）不轮询，否则学员停留即永久请求
+  return visible && reviewStatuses.some((status) => status === 'pending') ? 3000 : false;
 }
 
 export function evidenceLabel(level: string | null | undefined): string {

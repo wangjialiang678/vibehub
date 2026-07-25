@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as presentation from './presentation';
 import { diagnosisCompleteness, diagnosisEvidenceLabel, evidenceLabel, formatDateTime, formatDiagnosisPercentage, formatNumber, getDiagnosisState, getProjectStatus, postLoginPath } from './presentation';
 
 describe('presentation helpers', () => {
@@ -53,5 +54,28 @@ describe('presentation helpers', () => {
     expect(postLoginPath('teacher')).toBe('/admin');
     expect(postLoginPath('admin')).toBe('/admin');
     expect(postLoginPath('student')).toBe('/app');
+  });
+
+  it('gives every persisted review state a student-facing label', () => {
+    const getVersionReviewStatus = Reflect.get(presentation, 'getVersionReviewStatus') as undefined | ((status?: string | null) => { label: string; tone: string });
+
+    expect(getVersionReviewStatus).toEqual(expect.any(Function));
+    expect(getVersionReviewStatus?.('pending')).toEqual({ label: '待审核', tone: 'warning' });
+    expect(getVersionReviewStatus?.('approved')).toEqual({ label: '已通过', tone: 'success' });
+    expect(getVersionReviewStatus?.('rejected')).toEqual({ label: '已退回', tone: 'danger' });
+    expect(getVersionReviewStatus?.('superseded')).toEqual({ label: '已被后续提交替代', tone: 'muted' });
+    expect(getVersionReviewStatus?.(null)).toEqual({ label: '尚未进入审核', tone: 'blue' });
+  });
+
+  it('只在有版本真正等待审核（pending）时轮询提交记录', () => {
+    const getVersionHistoryPollInterval = Reflect.get(presentation, 'getVersionHistoryPollInterval') as undefined | ((input: { visible: boolean; reviewStatuses: Array<string | null | undefined> }) => number | false);
+
+    expect(getVersionHistoryPollInterval).toEqual(expect.any(Function));
+    expect(getVersionHistoryPollInterval?.({ visible: true, reviewStatuses: ['pending'] })).toBe(3000);
+    expect(getVersionHistoryPollInterval?.({ visible: true, reviewStatuses: [null, 'approved'] })).toBe(false);
+    // 空 status = blocker 版本没有 review（终态），不能永久轮询，否则学员停留即持续请求
+    expect(getVersionHistoryPollInterval?.({ visible: true, reviewStatuses: [null] })).toBe(false);
+    expect(getVersionHistoryPollInterval?.({ visible: false, reviewStatuses: ['pending'] })).toBe(false);
+    expect(getVersionHistoryPollInterval?.({ visible: true, reviewStatuses: ['approved', 'rejected', 'superseded'] })).toBe(false);
   });
 });

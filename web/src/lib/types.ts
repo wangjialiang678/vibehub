@@ -16,6 +16,16 @@ export interface Version {
   preview_url?: string | null;
 }
 
+export interface VersionHistory extends Version {
+  artifact_pruned?: boolean;
+  review?: { status: string; comment?: string | null; decided_at?: string | null } | null;
+  diagnosis_score?: number | null;
+}
+
+export interface VersionsResponse {
+  items: VersionHistory[];
+}
+
 export interface DiagnosisItem {
   check_key?: string;
   label?: string;
@@ -99,6 +109,13 @@ export interface CampOverview {
 export interface CampProject {
   id: string; title: string; owner_name: string; owner_username?: string; updated_at?: string | null;
   dev_status?: string | null; publish_status?: string | null; pending_version_id?: string | null;
+  collection_order?: number | null; collection_recommended?: boolean | number | null;
+}
+
+export interface CollectionUpdate {
+  project_id: string;
+  order: number;
+  recommended: boolean;
 }
 
 export interface InviteListItem {
@@ -132,6 +149,7 @@ export interface CampCollection {
     views?: number | null;
     url?: string | null;
     updated_at?: string | null;
+    featured?: boolean;
   }>;
   updated_at?: string | null;
 }

@@ -43,6 +43,7 @@ export default async function publicRoutes(app) {
           // 决策 5：默认只展示昵称
           author: vis === 'realname' ? (r.real_name || r.display_name) : r.display_name,
           avatar_url: r.avatar_url,
+          featured: Boolean(r.collection_recommended),
           version: r.label, views: Number(views?.n || 0),
           url: worksUrl(r.username, r.slug),
           updated_at: r.updated_at,
