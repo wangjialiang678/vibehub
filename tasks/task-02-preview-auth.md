@@ -11,7 +11,7 @@
 1. **本地/生产统一经 Node 校验**：预览请求要携带身份（skill token 或 web session cookie），Node 校验其 scope 属于该预览对应项目的 owner，或属于该项目所在课程的 teacher/admin。校验不过返回 404（不泄露存在性）。
    - 本地 `server/src/index.js` 的预览 serve 路由加校验。
    - 审核页 iframe 嵌入预览时要能带上老师身份——注意 iframe 跨 origin 不自动带第三方 cookie。**可行方案**：给预览签发一个短期、绑定项目+身份的一次性 claim（query token 或 signed cookie），审核页/学员看板拿自己的会话向 `POST /api/previews/:pid/grant` 换取该 claim，再用带 claim 的 URL 加载 iframe。claim 短期有效（如 10 分钟）、绑定项目、可因版本 superseded/rejected 失效。
-   - 生产 nginx（`infra/nginx/vibehub.conf`）预览 location 改为**代理回 Node**（不再 nginx 直出静态），由 Node 做上述校验后再返回文件；或用 `auth_request`。更新 nginx 配置与注释。
+   - 生产 nginx（`infra/nginx/vibehub-locations.conf`）预览 location 改为**代理回 Node**（不再 nginx 直出静态），由 Node 做上述校验后再返回文件；或用 `auth_request`。更新 nginx 配置与注释。
 
 2. **预览生命周期**：版本被 `superseded` 或 `rejected` 后，其预览 claim 失效（正式版发布后旧预览不再需要开放）。
 

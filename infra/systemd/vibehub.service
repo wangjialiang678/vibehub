@@ -1,0 +1,22 @@
+[Unit]
+Description=VibeHub
+After=network.target
+[Service]
+Type=simple
+User=vibehub
+WorkingDirectory=/opt/vibehub
+Environment=NODE_ENV=production
+Environment=VIBEHUB_DATA_DIR=/var/lib/vibehub
+Environment=VIBEHUB_PORT=4300
+Environment=VIBEHUB_HOST=127.0.0.1
+Environment=VIBEHUB_CONSOLE_ORIGIN=https://hub.supermind-ai.cn
+Environment=VIBEHUB_WORKS_ORIGIN=https://supermind-ai.cn
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=3
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vibehub
+PrivateTmp=true
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target

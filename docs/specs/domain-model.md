@@ -110,6 +110,8 @@ CREATE TABLE projects (
   dev_status    TEXT NOT NULL DEFAULT 'not_started',  -- 见 §2.1
   publish_status TEXT NOT NULL DEFAULT 'unpublished', -- 见 §2.4
   visibility    TEXT,                       -- NULL=继承 camp 默认
+  collection_order INTEGER NOT NULL DEFAULT 0,       -- 集合页同一分组内的手工顺序
+  collection_recommended INTEGER NOT NULL DEFAULT 0, -- 1=推荐位，排在普通作品之前
   live_version_id    TEXT REFERENCES versions(id),  -- 当前正式发布版本
   pending_version_id TEXT REFERENCES versions(id),  -- 当前待审核版本
   umami_website_id   TEXT,
@@ -193,20 +195,19 @@ CREATE INDEX idx_diag_version ON diagnoses(version_id, created_at DESC);
 
 **`score` 必须由 `dimensions` 按固定权重算出，不由模型生成。** 这是需求文档 §9.1.3「该数字必须能够由下方诊断项解释，不应成为缺少依据的装饰性分数」的直接落实。见架构文档中的诊断流水线设计。
 
-### 1.9 collection_entries — 集合页条目
+### 1.9 集合页编排 — `projects` 内嵌字段
 
-```sql
-CREATE TABLE collection_entries (
-  camp_id    TEXT NOT NULL REFERENCES camps(id),
-  project_id TEXT NOT NULL REFERENCES projects(id),
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  featured   INTEGER NOT NULL DEFAULT 0,    -- 是否推荐位（原型里第一个卡片是大卡）
-  added_at   TEXT NOT NULL,
-  PRIMARY KEY (camp_id, project_id)
-);
-```
+`collection_entries` 是早期设计，**当前实现没有创建或查询这张表**。启动时
+`server/src/lib/db.js` 通过幂等迁移为 `projects` 补上
+`collection_order INTEGER NOT NULL DEFAULT 0` 与
+`collection_recommended INTEGER NOT NULL DEFAULT 0`；上面的字段即为运行中的真实模型。
 
-集合页**只展示 `projects.publish_status='published'` 的项目**，且展示的是 `live_version_id` 指向的内容。这条约束在查询层强制，不依赖运营人员记得。
+老师调用 `POST /api/camps/:campId/collection` 时，逐条更新这两个 `projects` 字段。
+公开集合页查询只选择 `publish_status IN ('published','published_with_pending')`、
+`live_version_id IS NOT NULL` 的本课程项目，随后按
+`collection_recommended DESC, collection_order ASC, updated_at DESC` 排序；
+`camp_only` 可见性项目会在返回前被过滤。返回的 `featured` 标记直接来自
+`collection_recommended`。这些约束由 `server/src/routes/public.js` 的查询和白名单返回体执行。
 
 ---
 
@@ -352,7 +353,8 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 |---|---|
 | "13 个作品已上线 / 24 位共同创作者 / 6 个创作主题" | 聚合查询 |
 | 分类筛选（城市与生活 / 情绪与健康 / …） | `projects.category` DISTINCT |
-| 作品卡片（封面/标题/简介/作者/版本/浏览量） | `projects` + `versions` + umami |
+| 作品卡片（封面/标题/简介/作者/版本/浏览量） | `projects` + `versions` + `page_views` |
 | "已发布" 徽章 | `publish_status` |
+| 推荐位与展示顺序 | `projects.collection_recommended`、`projects.collection_order` |
 
 **结论：模型完整覆盖原型的全部界面元素，没有缺字段，也没有多余的表。**

@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="VibeHub 使用说明：让学员的作品从完成走到公开上线。">
+  <title>VibeHub 使用说明｜把作品带到线上</title>
+  <style>
+    :root {
+      --canvas: #f8f5ef;
+      --surface: #fbf9f5;
+      --ink: #242321;
+      --ink-soft: #73716d;
+      --line: #ded9d0;
+      --coral: #ed624a;
+      --blue: #3978bd;
+      --coral-wash: #fff0eb;
+      --blue-wash: #edf4fc;
+      --shadow: 0 18px 44px rgba(49, 43, 35, .10), 0 2px 5px rgba(49, 43, 35, .05);
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: "PingFang SC", system-ui, sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    img { display: block; max-width: 100%; height: auto; }
+    code {
+      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: .92em;
+    }
+
+    .page-shell { overflow: hidden; }
+    .container { width: min(1160px, calc(100% - 48px)); margin: 0 auto; }
+
+    .site-header {
+      position: relative;
+      z-index: 2;
+      border-bottom: 1px solid var(--line);
+      background: rgba(248, 245, 239, .92);
+    }
+    .nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 72px;
+      gap: 24px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+    .brand-mark {
+      display: grid;
+      width: 31px;
+      height: 31px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      color: var(--coral);
+      font-family: Georgia, serif;
+      font-size: 22px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .nav-links { display: flex; gap: 22px; color: var(--ink-soft); font-size: 14px; }
+    .nav-links a { transition: color .2s ease; }
+    .nav-links a:hover { color: var(--coral); }
+
+    .hero { position: relative; padding: 88px 0 74px; }
+    .hero::before {
+      position: absolute;
+      top: -230px;
+      right: -270px;
+      width: 650px;
+      height: 650px;
+      border: 1px solid rgba(237, 98, 74, .14);
+      border-radius: 50%;
+      box-shadow: 0 0 0 60px rgba(237, 98, 74, .035), 0 0 0 150px rgba(237, 98, 74, .025);
+      content: "";
+      pointer-events: none;
+    }
+    .hero-grid {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1.06fr) minmax(340px, .94fr);
+      align-items: center;
+      gap: clamp(38px, 7vw, 92px);
+    }
+    .eyebrow, .section-kicker, .step-no {
+      margin: 0 0 12px;
+      color: var(--coral);
+      font-size: 13px;
+      font-weight: 760;
+      letter-spacing: .11em;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      max-width: 690px;
+      margin-bottom: 22px;
+      font-size: clamp(42px, 6.2vw, 76px);
+      font-weight: 800;
+      letter-spacing: -.075em;
+      line-height: 1.08;
+    }
+    .hero-lead {
+      max-width: 650px;
+      margin-bottom: 29px;
+      color: #53504b;
+      font-size: clamp(18px, 2vw, 22px);
+      letter-spacing: -.02em;
+      line-height: 1.65;
+    }
+    .route {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      color: var(--ink-soft);
+      font-size: 14px;
+      font-weight: 650;
+    }
+    .route span { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .route span:not(:last-child)::after {
+      width: clamp(20px, 3vw, 42px);
+      height: 1px;
+      margin: 0 10px;
+      background: var(--line);
+      content: "";
+    }
+    .route span:first-child { color: var(--coral); }
+
+    .login-card {
+      position: relative;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      transform: rotate(1.3deg);
+    }
+    .login-card::before {
+      position: absolute;
+      top: -12px;
+      right: 34px;
+      width: 98px;
+      height: 24px;
+      border-right: 1px solid rgba(237, 98, 74, .3);
+      border-left: 1px solid rgba(237, 98, 74, .3);
+      background: rgba(255, 236, 228, .75);
+      content: "";
+      transform: rotate(-2deg);
+    }
+    .login-card img { border-radius: 13px; }
+    .login-card figcaption { padding: 14px 8px 3px; color: var(--ink-soft); font-size: 13px; }
+    .login-card strong { color: var(--ink); }
+
+    .roles { padding: 72px 0 108px; border-top: 1px solid var(--line); }
+    .section-heading { display: flex; justify-content: space-between; align-items: end; gap: 24px; margin-bottom: 30px; }
+    .section-heading h2, .section-title h2 {
+      margin-bottom: 0;
+      font-size: clamp(30px, 4vw, 46px);
+      font-weight: 790;
+      letter-spacing: -.06em;
+      line-height: 1.15;
+    }
+    .section-heading > p { max-width: 365px; margin: 0; color: var(--ink-soft); font-size: 15px; }
+    .role-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .role-card {
+      min-height: 230px;
+      padding: 25px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: var(--surface);
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+    .role-card:hover { box-shadow: 0 12px 28px rgba(49, 43, 35, .08); transform: translateY(-4px); }
+    .role-card:nth-child(1) { border-top: 3px solid var(--coral); }
+    .role-card:nth-child(2) { border-top: 3px solid var(--blue); }
+    .role-card:nth-child(3) { border-top: 3px solid #9e997f; }
+    .role-icon {
+      display: grid;
+      width: 39px;
+      height: 39px;
+      margin-bottom: 25px;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--coral-wash);
+      color: var(--coral);
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .role-card:nth-child(2) .role-icon { background: var(--blue-wash); color: var(--blue); }
+    .role-card:nth-child(3) .role-icon { background: #f1eee4; color: #746f5c; }
+    .role-card h3 { margin-bottom: 8px; font-size: 23px; letter-spacing: -.04em; }
+    .role-card p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+
+    .guide-section { position: relative; padding: 106px 0; }
+    .teacher-section { background: var(--surface); }
+    .student-section { border-top: 1px solid var(--line); }
+    .visitor-section { padding-bottom: 118px; background: #f1ede6; }
+    .section-intro { max-width: 710px; margin-bottom: 54px; }
+    .section-intro h2 { margin-bottom: 17px; font-size: clamp(34px, 4.6vw, 54px); font-weight: 800; letter-spacing: -.07em; line-height: 1.1; }
+    .section-intro p:last-child { margin: 0; color: var(--ink-soft); font-size: 17px; }
+    .steps { display: grid; gap: 72px; }
+    .step {
+      display: grid;
+      grid-template-columns: minmax(250px, .55fr) minmax(0, 1.45fr);
+      align-items: center;
+      gap: clamp(28px, 6vw, 76px);
+    }
+    .step:nth-child(even) { grid-template-columns: minmax(0, 1.45fr) minmax(250px, .55fr); }
+    .step:nth-child(even) .step-copy { order: 2; }
+    .step:nth-child(even) .screenshot { order: 1; }
+    .step-copy { max-width: 420px; }
+    .step-copy h3 { margin-bottom: 15px; font-size: clamp(25px, 3vw, 34px); font-weight: 780; letter-spacing: -.055em; line-height: 1.2; }
+    .step-copy p { margin-bottom: 14px; color: #5e5a55; }
+    .step-copy p:last-child { margin-bottom: 0; }
+    .callout {
+      margin-top: 21px;
+      padding: 15px 17px;
+      border-left: 3px solid var(--coral);
+      border-radius: 0 10px 10px 0;
+      background: var(--coral-wash);
+      color: #6a4038;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    .callout strong { color: var(--coral); }
+    .screenshot { margin: 0; min-width: 0; }
+    .screenshot img {
+      width: 100%;
+      border: 1px solid #d7d1c8;
+      border-radius: 15px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    .screenshot figcaption { margin-top: 12px; color: var(--ink-soft); font-size: 13px; }
+    .screenshot figcaption::before { margin-right: 8px; color: var(--coral); content: "●"; font-size: 10px; vertical-align: 1px; }
+
+    .command-panel {
+      display: grid;
+      gap: 13px;
+      margin: 24px 0 22px;
+    }
+    .command {
+      overflow-x: auto;
+      padding: 15px 17px;
+      border: 1px solid #34312e;
+      border-radius: 11px;
+      background: #2b2926;
+      color: #f5eee5;
+      font-size: 13px;
+      line-height: 1.45;
+      white-space: nowrap;
+    }
+    .command b { margin-right: 10px; color: #fc9a88; font-weight: 700; }
+    .status-line { padding-top: 19px; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 14px; }
+    .status-line code { color: var(--blue); font-weight: 700; }
+    .publish-note {
+      margin-top: 25px;
+      padding: 18px 20px;
+      border: 1px solid rgba(237, 98, 74, .45);
+      border-radius: 13px;
+      background: var(--coral-wash);
+    }
+    .publish-note strong { display: block; margin-bottom: 4px; color: var(--coral); font-size: 20px; letter-spacing: -.03em; }
+    .publish-note p { margin: 0; color: #6a4038; font-size: 14px; }
+
+    .collection-layout { display: grid; grid-template-columns: minmax(240px, .55fr) minmax(0, 1.45fr); align-items: start; gap: clamp(30px, 7vw, 85px); }
+    .collection-copy { position: sticky; top: 24px; }
+    .collection-copy h2 { margin-bottom: 18px; font-size: clamp(34px, 4.5vw, 52px); font-weight: 800; letter-spacing: -.075em; line-height: 1.1; }
+    .collection-copy p:not(.section-kicker) { color: var(--ink-soft); }
+    .entry-points { display: grid; gap: 9px; margin-top: 25px; padding: 0; list-style: none; }
+    .entry-points li { display: flex; align-items: baseline; gap: 11px; color: #5d5a54; font-size: 14px; }
+    .entry-points li::before { color: var(--blue); content: "↗"; font-weight: 800; }
+
+    .footer { padding: 58px 0 48px; background: #292724; color: #f4efe7; }
+    .footer-grid { display: grid; grid-template-columns: auto 1fr; align-items: start; gap: 28px 45px; }
+    .footer-mark { display: inline-grid; width: 40px; height: 40px; place-items: center; border: 1px solid rgba(255,255,255,.25); border-radius: 50%; color: #fb826e; font-family: Georgia, serif; font-size: 26px; }
+    .footer p { max-width: 800px; margin: 0; color: #d5d0c8; font-size: 17px; line-height: 1.7; }
+    .footer p strong { color: #fffaf3; }
+    .footer-note { grid-column: 2; color: #a9a39a; font-size: 13px; }
+
+    @media (max-width: 800px) {
+      .container { width: min(100% - 34px, 650px); }
+      .nav { min-height: 64px; }
+      .nav-links { gap: 14px; font-size: 12px; }
+      .hero { padding: 54px 0 64px; }
+      .hero-grid, .role-grid, .step, .step:nth-child(even), .collection-layout { grid-template-columns: 1fr; }
+      .hero-grid { gap: 42px; }
+      .login-card { max-width: 600px; margin: 0 auto; transform: rotate(.6deg); }
+      .roles { padding: 58px 0 76px; }
+      .section-heading { display: block; margin-bottom: 25px; }
+      .section-heading > p { margin-top: 13px; }
+      .role-card { min-height: 0; padding: 22px; }
+      .role-icon { margin-bottom: 18px; }
+      .guide-section { padding: 75px 0; }
+      .section-intro { margin-bottom: 39px; }
+      .steps { gap: 56px; }
+      .step:nth-child(even) .step-copy, .step:nth-child(even) .screenshot { order: initial; }
+      .step-copy { max-width: none; }
+      .collection-copy { position: static; }
+      .visitor-section { padding-bottom: 82px; }
+      .footer { padding: 44px 0 34px; }
+      .footer-grid { grid-template-columns: 40px 1fr; gap: 18px; }
+      .footer-note { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 480px) {
+      .container { width: min(100% - 28px, 650px); }
+      .brand { font-size: 14px; }
+      .brand-mark { width: 27px; height: 27px; font-size: 19px; }
+      .nav-links a:last-child { display: none; }
+      h1 { font-size: 42px; }
+      .hero-lead { font-size: 17px; }
+      .route { display: grid; gap: 8px; }
+      .route span:not(:last-child)::after { display: none; }
+      .section-intro h2, .collection-copy h2 { font-size: 35px; }
+      .section-intro p:last-child { font-size: 16px; }
+      .command { padding: 14px; font-size: 12px; }
+      .footer p { font-size: 15px; }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .hero-copy, .login-card, .role-card, .guide-section { animation: reveal .65s both; }
+      .login-card { animation-delay: .1s; }
+      .role-card:nth-child(2) { animation-delay: .08s; }
+      .role-card:nth-child(3) { animation-delay: .16s; }
+      @keyframes reveal { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+      .login-card { animation-name: loginReveal; }
+      @keyframes loginReveal { from { opacity: 0; transform: translateY(16px) rotate(1.3deg); } to { opacity: 1; transform: translateY(0) rotate(1.3deg); } }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="site-header">
+      <nav class="container nav" aria-label="页面导航">
+        <a class="brand" href="#top" aria-label="VibeHub 使用说明首页"><span class="brand-mark" aria-hidden="true">V</span>VibeHub <span>使用说明</span></a>
+        <div class="nav-links">
+          <a href="#teacher">老师</a>
+          <a href="#student">学员</a>
+          <a href="#visitor">访客</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="container hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">VibeHub · 作品发布营地</p>
+            <h1>把做出来的作品，带到真正的线上。</h1>
+            <p class="hero-lead">给零基础学员一条「作品从做出来到公开上线」的完整通道，给老师一个看得见、审得了、能汇总的管理台。</p>
+            <div class="route" aria-label="作品发布路径">
+              <span>做好作品</span><span>提交审核</span><span>公开上线</span>
+            </div>
+          </div>
+          <figure class="login-card">
+            <img src="assets/01-login.png" alt="VibeHub 邀请码登录页截图">
+            <figcaption><strong>从一张邀请码开始。</strong> 登录无需密码；邀请码就是你在课程里的身份。</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="roles" aria-labelledby="roles-title">
+        <div class="container">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">先看全貌</p>
+              <h2 id="roles-title">同一个营地，三种关心</h2>
+            </div>
+            <p>你不需要了解每一处后台。找到与你有关的那一栏，顺着它走就好。</p>
+          </div>
+          <div class="role-grid">
+            <article class="role-card">
+              <div class="role-icon" aria-hidden="true">↗</div>
+              <h3>学员</h3>
+              <p>把网页做好、提交版本、看清自己还差哪一步；审核通过后，拿到可以分享的正式网址。</p>
+            </article>
+            <article class="role-card">
+              <div class="role-icon" aria-hidden="true">✓</div>
+              <h3>老师</h3>
+              <p>发邀请码、看全班进度、找到卡住的同学；在审核台看完作品后再决定发布或退回。</p>
+            </article>
+            <article class="role-card">
+              <div class="role-icon" aria-hidden="true">◎</div>
+              <h3>访客</h3>
+              <p>从课程作品集合页进入，直接浏览已经正式发布的作品；每一件作品都有独立入口。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="guide-section teacher-section" id="teacher" aria-labelledby="teacher-title">
+        <div class="container">
+          <div class="section-intro">
+            <p class="section-kicker">老师怎么用</p>
+            <h2 id="teacher-title">从发码到发布，把课程进度放在眼前。</h2>
+            <p>打开控制台 <code>https://hub.supermind-ai.cn</code>，用管理员发放的老师邀请码登录。这里没有密码，邀请码就是进入管理台的凭证。</p>
+          </div>
+
+          <div class="steps">
+            <article class="step">
+              <div class="step-copy">
+                <p class="step-no">01 / 发放</p>
+                <h3>批量生成学员邀请码</h3>
+                <p>进入「邀请码管理」，按班级人数生成学员码；导出 CSV 后发给每一位学员。邀请码明码只显示一次，请在生成后及时保存。</p>
+                <div class="callout"><strong>需要换码？</strong> 在记录中可撤销旧邀请码，再生成新的即可。</div>
+              </div>
+              <figure class="screenshot">
+                <img src="assets/04-teacher-invites.png" alt="老师端邀请码管理页面：批量生成、导出 CSV 与撤销邀请码">
+                <figcaption>图 1｜邀请码管理：生成、导出、撤销都在这里完成。</figcaption>
+              </figure>
+            </article>
+
+            <article class="step">
+              <div class="step-copy">
+                <p class="step-no">02 / 关注</p>
+                <h3>一眼看全班走到哪一步</h3>
+                <p>「课程总览」把参与人数、项目数、开发中、待审核、已发布等 8 项进度放在一起。想先帮谁？从「卡住了的人」开始；想了解刚发生什么？看最近动态。</p>
+                <div class="callout"><strong>它是课程的仪表盘。</strong> 不必逐个追问，也能先找到需要关注的项目。</div>
+              </div>
+              <figure class="screenshot">
+                <img src="assets/02-teacher-overview.png" alt="老师端课程总览页面：进度统计、卡住了的人和最近动态">
+                <figcaption>图 2｜课程总览：进度、需要关注的人与最近动态。</figcaption>
+              </figure>
+            </article>
+
+            <article class="step">
+              <div class="step-copy">
+                <p class="step-no">03 / 审核</p>
+                <h3>预览作品，再决定是否正式发布</h3>
+                <p>在「审核台」左侧选择待审核的版本，右侧直接预览学员作品；同时查看开发完成度、前端与服务端的 AI 诊断，以及本次更新说明。</p>
+                <div class="callout"><strong>两个动作，清晰分流。</strong> 符合要求就点「审核并发布」；还需调整就「退回修改」，并给学员留下具体意见。</div>
+              </div>
+              <figure class="screenshot">
+                <img src="assets/03-teacher-review.png" alt="老师端审核台：待审队列、作品预览、AI 诊断和审核发布按钮">
+                <figcaption>图 3｜审核台：预览、诊断、退回或发布都在同一处。</figcaption>
+              </figure>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="guide-section student-section" id="student" aria-labelledby="student-title">
+        <div class="container">
+          <div class="section-intro">
+            <p class="section-kicker">学员怎么用</p>
+            <h2 id="student-title">在你熟悉的 AI 工具里完成接入和提交。</h2>
+            <p>无论你正在使用 Claude Code、Codex 还是 WorkBuddy，收到老师的邀请码后，在自己的项目目录中完成下面的几步。</p>
+          </div>
+
+          <div class="step">
+            <div class="step-copy">
+              <p class="step-no">01 / 接入与提交</p>
+              <h3>先绑定，再把这次修改交给老师看</h3>
+              <div class="command-panel" aria-label="VibeHub 命令">
+                <div class="command"><b>$</b><code>vibehub bind CAMP-XXXX</code></div>
+                <div class="command"><b>$</b><code>vibehub deploy --summary &quot;本次做了什么&quot;</code></div>
+              </div>
+              <p>绑定只需一次。网页做好后，运行提交命令，并用一句话说明这次改了什么；老师会在审核时看到这份说明。</p>
+              <p class="status-line"><code>vibehub status</code> 可以查看当前状态和 AI 诊断，知道自己做到了哪里、下一步该检查什么。</p>
+              <div class="publish-note">
+                <strong>提交 ≠ 上线</strong>
+                <p>提交后的版本会进入老师审核队列。只有老师审核通过，才会成为访客可以打开的正式版本。</p>
+              </div>
+            </div>
+            <figure class="screenshot">
+              <img src="assets/05-student-dashboard.png" alt="学员端我的项目看板：作品预览、二维码、开发完成度、验证覆盖率和版本状态">
+              <figcaption>图 4｜我的项目：看预览、访问入口、完成度诊断与项目记录。</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="guide-section visitor-section" id="visitor" aria-labelledby="visitor-title">
+        <div class="container collection-layout">
+          <div class="collection-copy">
+            <p class="section-kicker">访客看什么</p>
+            <h2 id="visitor-title">从一处集合，走进每一个作品。</h2>
+            <p>课程作品集合页展示所有已正式发布的作品。访客不需要登录；选中一张作品卡片，就能进入它自己的独立网页。</p>
+            <ul class="entry-points">
+              <li>只展示审核通过的正式版本</li>
+              <li>每件作品都有独立入口</li>
+              <li>适合课程成果展示与分享</li>
+            </ul>
+          </div>
+          <figure class="screenshot">
+            <img src="assets/06-collection.png" alt="VibeHub 课程作品集合页，展示多个已发布作品卡片">
+            <figcaption>图 5｜作品集合页：把正式发布的课程成果聚在一起。</figcaption>
+          </figure>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-grid">
+        <div class="footer-mark" aria-hidden="true">V</div>
+        <p><strong>作品是纯静态站，平台提供托管数据能力。</strong> 学员不用碰服务器；发布前由老师审核；AI 诊断会把完成度和验证覆盖率讲清楚、看得见。</p>
+        <div class="footer-note">VibeHub · 让每一件作品，走到可以被看见的地方。</div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
