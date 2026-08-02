@@ -127,7 +127,7 @@ Codex 的独立方案主张 **P0 只发静态站，BaaS 放 P1**，以缩小首�
 | 用途 | 域名 | 说明 |
 |---|---|---|
 | 学员作品正式版 | `https://supermind-ai.cn/vibehub/<username>/<projectname>/` | 主域路径式地址 |
-| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | Node 校验 10 分钟 HMAC claim，带 `X-Robots-Tag: noindex` |
+| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | Node 用 10 分钟 HMAC claim 换路径 cookie，303 清除 query，带 `X-Robots-Tag: noindex` |
 | 平台控制台 + API | `https://hub.supermind-ai.cn` | 学员看板、老师审核台和 `/api/*`；与作品不同 origin |
 | 课程集合页 | `hub.supermind-ai.cn/c/<camp-slug>` | 控制台内页面；公开数据接口仍为 `/api/public/*` |
 
@@ -436,9 +436,9 @@ vibehub-skill/
 | 命令 | 作用 |
 |---|---|
 | `vibehub bind <邀请码>` | 绑定身份与项目 |
-| `vibehub status` | 当前版本 / 审核状态 / 线上地址 / 诊断摘要 |
-| `vibehub deploy [--summary "..."]` | 打包 → 提交 → 返回预览地址 |
-| `vibehub open` | 浏览器打开个人看板 |
+| `vibehub status` | 当前版本 / 审核状态 / 无凭证预览定位地址 / 诊断摘要；不签发或打印 claim |
+| `vibehub deploy [--summary "..."]` | 打包 → 提交 → 显示无凭证预览定位地址；不打印返回体中的 claim |
+| `vibehub open` | 为待审版本换取短期 claim 并直接交给浏览器；终端不回显 claim。无待审版时打开正式作品 |
 | `vibehub logs` | 最近几次提交与审核反馈（含驳回原因） |
 
 ### 6.4 凭证设计
@@ -524,7 +524,7 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 | 压缩包路径穿越 / 炸弹 | §4.3 解包规则 |
 | BaaS 接口被刷 | 按项目配额 + 令牌桶限流 + 单条大小限制 |
 | 作品内容违规 | **发布前人工审核**（产品设计已强制）；AI 调用走网关的安全过滤；可选自动内容扫描 |
-| 未审核预览泄露或被搜索引擎收录 | 16 位 id 只负责定位；访问需 10 分钟 HMAC claim，绑定版本/项目/身份并在每次请求重查待审状态；匿名与越权返回 404，另加 `X-Robots-Tag: noindex` |
+| 未审核预览泄露或被搜索引擎收录 | 16 位 id 只负责定位；10 分钟 HMAC claim 绑定版本/项目/身份/签发 token，只用于换路径 HttpOnly cookie 并 303 清 URL；每次文件请求重查 token、课程成员和待审状态；匿名与越权返回 404，另加 `X-Robots-Tag: noindex` |
 | 平台被作品拖垮 | 正式作品由 nginx 直接 serve；仅低频的未审核预览经过 Node 做授权后读取静态文件 |
 | 邀请码泄露被冒用 | 码绑定后状态变更；限制 `max_devices`；老师可即时撤销并级联吊销 token |
 

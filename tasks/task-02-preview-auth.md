@@ -28,3 +28,9 @@
 - `bash scripts/loop-test.sh` 全绿，并**新增安全断言**：拿不到 claim 的匿名请求访问预览返回 404/401；owner 和老师能访问。
 - 把这条断言也加进 `scripts/loop-test.sh` 的「安全回归」段（预览未授权访问被拒）。
 - 审核页老师仍能在 iframe 里看到预览（不因鉴权而白屏）。
+
+## 安全实现补充
+
+- query claim 只用于交换路径专用的 host-only HttpOnly cookie；服务端随后 `303` 到删除 claim、保留其他 query 的同路径，交换响应不返回作品内容。
+- claim 绑定签发 token id。每次文件访问重查 token 未撤销/过期、课程成员身份与角色仍有效，以及版本仍处于当前待审状态。
+- HTTP 探测器维护内部 cookie，并从干净 URL 加载入口与资源；CLI 的 deploy/status/open 均不回显 bearer claim。

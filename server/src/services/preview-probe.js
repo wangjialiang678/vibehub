@@ -36,8 +36,7 @@ function safeStaticUrl(value, entry, basePath) {
   try { url = new URL(value, entry); } catch { return null; }
   // 页面中的任意 JS 都不能诱导探测器跳出这个预览目录访问内网或元数据地址。
   if (url.origin !== entry.origin || !url.pathname.startsWith(basePath)) return null;
-  const claim = entry.searchParams.get('claim');
-  if (claim) url.searchParams.set('claim', claim);
+  url.searchParams.delete('claim');
   return url;
 }
 
@@ -85,13 +84,31 @@ async function readLimited(response, maxBytes) {
   return { text: new TextDecoder().decode(Buffer.concat(chunks)), bytes: size };
 }
 
-async function fetchStatic(url, signal, maxReadBytes) {
-  const response = await fetch(url, { signal, redirect: 'manual' });
+async function fetchStatic(url, signal, maxReadBytes, cookie) {
+  const headers = cookie ? { cookie } : undefined;
+  const response = await fetch(url, { signal, redirect: 'manual', headers });
   const contentType = response.headers.get('content-type') || '';
   const wantsText = /(?:text\/html|text\/css|javascript)/i.test(contentType);
   const read = wantsText && response.ok ? await readLimited(response, maxReadBytes) : { text: '', bytes: 0 };
   if (!wantsText) response.body?.cancel().catch(() => {});
   return { status: response.status, contentType, ...read };
+}
+
+async function exchangePreviewClaim(entry, signal) {
+  if (!entry.searchParams.has('claim')) return { entry, cookie: null };
+  const response = await fetch(entry, { signal, redirect: 'manual' });
+  response.body?.cancel().catch(() => {});
+  if (response.status !== 303) throw new Error('预览 claim 未返回安全重定向');
+  const location = response.headers.get('location');
+  const rawCookie = response.headers.get('set-cookie') || '';
+  const cookie = rawCookie.split(';', 1)[0].trim();
+  if (!location || !cookie || !/^[^=;\s]+=[^;]*$/.test(cookie)) throw new Error('预览 claim 未换取有效 cookie');
+  const cleanEntry = new URL(location, entry);
+  // claim 交换只允许回到同源同路径，并且清理后的 URL 里不能再出现凭证。
+  if (cleanEntry.origin !== entry.origin || cleanEntry.pathname !== entry.pathname || cleanEntry.searchParams.has('claim')) {
+    throw new Error('预览 claim 重定向越界或未清理');
+  }
+  return { entry: cleanEntry, cookie };
 }
 
 /**
@@ -107,21 +124,24 @@ export async function probePreviewHttp(previewUrl) {
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LIMITS.probeTimeoutMs);
-  const basePath = entry.pathname.endsWith('/') ? entry.pathname : `${entry.pathname}/`;
   const failures = [];
   const seen = new Set();
-  const queued = [entry];
   let resourceChecked = 0;
   let remainingReadBytes = LIMITS.probeReadBytes;
 
   try {
+    const session = await exchangePreviewClaim(entry, controller.signal);
+    entry = session.entry;
+    const cookie = session.cookie;
+    const basePath = entry.pathname.endsWith('/') ? entry.pathname : `${entry.pathname}/`;
+    const queued = [entry];
     let entryStatus = null;
     while (queued.length && resourceChecked < LIMITS.probeResources) {
       const target = queued.shift();
       const resourceKey = target && `${target.origin}${target.pathname}`;
       if (!target || seen.has(resourceKey)) continue;
       seen.add(resourceKey);
-      const result = await fetchStatic(target, controller.signal, remainingReadBytes);
+      const result = await fetchStatic(target, controller.signal, remainingReadBytes, cookie);
       remainingReadBytes = Math.max(0, remainingReadBytes - result.bytes);
       resourceChecked += 1;
       if (entryStatus === null) entryStatus = result.status;

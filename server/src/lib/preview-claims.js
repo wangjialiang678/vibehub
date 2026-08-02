@@ -27,6 +27,7 @@ export function issuePreviewClaim({ previewId, versionId, projectId, identity },
     camp_id: identity.camp_id,
     scope_project_id: identity.project_id || null,
     role: identity.role,
+    issuer_token_id: identity.id,
     iat,
     exp: iat + PREVIEW_CLAIM_TTL_SECONDS,
   };
@@ -48,7 +49,7 @@ export function verifyPreviewClaim(claim, previewId, checkedAt = Date.now()) {
   try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch { return null; }
   const nowSeconds = Math.floor(checkedAt / 1000);
   if (payload?.aud !== AUDIENCE || payload.pid !== previewId || !payload.vid || !payload.project_id ||
-      !payload.sub || !payload.camp_id || !payload.role || !Number.isInteger(payload.iat) ||
+      !payload.sub || !payload.camp_id || !payload.role || !payload.issuer_token_id || !Number.isInteger(payload.iat) ||
       !Number.isInteger(payload.exp) || payload.exp <= nowSeconds || payload.exp - payload.iat !== PREVIEW_CLAIM_TTL_SECONDS) return null;
   return payload;
 }

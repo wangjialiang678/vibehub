@@ -78,6 +78,7 @@ cli bind "$CODE" >/tmp/loop-bind.log 2>&1 && ok "bind 成功" || { bad "bind 失
 DEPLOY="$(cd "$WORK" && cli deploy --summary "闭环测试" --flows "探索" 2>&1)"
 echo "$DEPLOY" | grep -q "已提交" && ok "deploy 成功" || { bad "deploy 失败"; echo "$DEPLOY"; exit 1; }
 echo "$DEPLOY" | grep -q "undefined" && bad "deploy 输出含 undefined（异步契约回归）" || ok "deploy 无 undefined"
+echo "$DEPLOY" | grep -qE 'claim=|preview-secret' && bad "deploy 输出泄露预览 bearer claim" || ok "deploy 不回显预览 bearer claim"
 
 # ── 3. 诊断异步完成 ──────────────────────────────────────────
 step "诊断异步完成"
@@ -105,11 +106,24 @@ else
   bad "匿名访问未审核预览返回 ${ANON_PREVIEW}（应 404/401）"
 fi
 OWNER_PREVIEW="$(req -X POST -H "Authorization: Bearer $STOK" "$API/api/previews/$PREV/grant" | jqp "d.get('preview_url','')")"
-OWNER_HC="$(req -L -c "$TMP/owner-preview.cookies" -o /dev/null -w '%{http_code}' "$OWNER_PREVIEW")"
+OWNER_CLAIM="$(python3 -c "import sys,urllib.parse;print(urllib.parse.parse_qs(urllib.parse.urlsplit(sys.argv[1]).query).get('claim',[''])[0])" "$OWNER_PREVIEW")"
+OWNER_EXCHANGE="$(req -D "$TMP/owner-preview.headers" -c "$TMP/owner-preview.cookies" -o "$TMP/owner-preview.body" -w '%{http_code}' "$OWNER_PREVIEW")"
+OWNER_LOCATION="$(awk '/^[Ll]ocation:/{sub(/^[^:]*:[[:space:]]*/,""); sub(/\r$/,""); print; exit}' "$TMP/owner-preview.headers")"
+if [ "$OWNER_EXCHANGE" = "303" ] && [ -n "$OWNER_LOCATION" ] && ! echo "$OWNER_LOCATION" | grep -q 'claim=' && ! grep -q '聆听城市的声音' "$TMP/owner-preview.body"; then
+  ok "owner claim 只换 cookie，并 303 到无 claim 地址"
+else
+  bad "owner claim 交换不安全（HTTP ${OWNER_EXCHANGE}，Location=${OWNER_LOCATION}）"
+fi
+OWNER_HC="$(req -b "$TMP/owner-preview.cookies" -o /dev/null -w '%{http_code}' "$API$OWNER_LOCATION")"
 [ "$OWNER_HC" = "200" ] && ok "owner 可访问未审核预览" || bad "owner 预览返回 ${OWNER_HC}（应 200）"
 TEACHER_PREVIEW="$(req -X POST -H "Authorization: Bearer $TEACHER_TOKEN" "$API/api/previews/$PREV/grant" | jqp "d.get('preview_url','')")"
 TEACHER_HC="$(req -L -c "$TMP/teacher-preview.cookies" -o /dev/null -w '%{http_code}' "$TEACHER_PREVIEW")"
 [ "$TEACHER_HC" = "200" ] && ok "同课程老师可访问未审核预览" || bad "老师预览返回 ${TEACHER_HC}（应 200）"
+if [ -n "$OWNER_CLAIM" ] && ! grep -Fq "$OWNER_CLAIM" /tmp/loop-server.log; then
+  ok "服务日志不记录明文 preview claim"
+else
+  bad "服务日志出现明文 preview claim"
+fi
 
 # ── 4. 老师审核 → 发布 → 正式地址可访问 ──────────────────────
 step "审核发布"

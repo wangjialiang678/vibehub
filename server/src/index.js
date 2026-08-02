@@ -90,9 +90,13 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
       diagnosisQueue.enqueue({
         diagnosisId: task.diagnosis_id, versionId: task.version_id, projectId: task.project_id,
         campId: task.camp_id, versionDir: join(paths.versions, task.version_id),
-        previewUrl: () => createPreviewGrant(task.preview_id, {
-          user_id: task.owner_user_id, camp_id: task.camp_id, project_id: task.project_id, role: 'student',
-        })?.preview_url,
+        previewUrl: () => {
+          const identity = db.prepare(`SELECT * FROM tokens WHERE user_id=? AND camp_id=? AND project_id=?
+                                       AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)
+                                       ORDER BY created_at DESC LIMIT 1`)
+            .get(task.owner_user_id, task.camp_id, task.project_id, now());
+          return identity ? createPreviewGrant(task.preview_id, identity)?.preview_url : null;
+        },
         flows,
       });
     }
@@ -193,31 +197,36 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('content-security-policy', `frame-ancestors 'self' ${CONSOLE_ORIGIN}`);
     const cookieName = previewCookieName(req.params.pid);
-    const queryClaim = req.query?.claim;
-    const access = authorizePreviewRequest(req.params.pid, queryClaim || req.cookies?.[cookieName]);
+    const hasQueryClaim = Object.prototype.hasOwnProperty.call(req.query || {}, 'claim');
+    const queryClaim = hasQueryClaim ? req.query.claim : null;
+    const access = authorizePreviewRequest(req.params.pid, hasQueryClaim ? queryClaim : req.cookies?.[cookieName]);
     if (!access) {
       reply.code(404).type('text/html').send('<h1>404</h1>');
-      return false;
+      return 'denied';
     }
-    if (queryClaim) {
+    if (hasQueryClaim) {
       reply.setCookie(cookieName, queryClaim, {
-        path: `${WORKS_PREFIX}/_preview/${req.params.pid}/`,
+        path: `${WORKS_PREFIX}/_preview/${req.params.pid}`,
         httpOnly: true,
         sameSite: 'lax',
         secure: process.env.NODE_ENV === 'production',
         maxAge: access.maxAge,
       });
+      const target = new URL(req.raw.url, 'http://vibehub.local');
+      target.searchParams.delete('claim');
+      reply.redirect(`${target.pathname}${target.search}`, 303);
+      return 'redirected';
     }
-    return true;
+    return 'authorized';
   };
   app.get(`${WORKS_PREFIX}/_preview/:pid/*`, async (req, reply) => {
-    if (!previewAccess(req, reply)) return reply;
+    if (previewAccess(req, reply) !== 'authorized') return reply;
     return serveFrom(join(paths.previews, req.params.pid), req.params['*'], reply);
   });
   app.get(`${WORKS_PREFIX}/_preview/:pid`, async (req, reply) => {
-    if (!previewAccess(req, reply)) return reply;
-    const claim = req.query?.claim ? `?claim=${encodeURIComponent(req.query.claim)}` : '';
-    return reply.redirect(`${WORKS_PREFIX}/_preview/${req.params.pid}/${claim}`);
+    if (previewAccess(req, reply) !== 'authorized') return reply;
+    const target = new URL(req.raw.url, 'http://vibehub.local');
+    return reply.redirect(`${target.pathname}/${target.search}`);
   });
 
   app.post(`${WORKS_PREFIX}/_hit`, async (req, reply) => {

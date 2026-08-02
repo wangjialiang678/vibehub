@@ -44,7 +44,7 @@ test('deploy 在异步诊断未就绪时提示稍后查看状态而不输出 und
       res.writeHead(201, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({
         label: 'v0.1.0',
-        preview_url: 'http://works.test/vibehub/_preview/demo/',
+        preview_url: 'http://works.test/vibehub/_preview/demo/?claim=deploy-secret',
         diagnosis: { id: 'd_demo', status: 'running' },
         message: '已生成预览版本。',
       }));
@@ -66,6 +66,8 @@ test('deploy 在异步诊断未就绪时提示稍后查看状态而不输出 und
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /正在做诊断，稍后用 vibehub status 查看/);
     assert.doesNotMatch(result.stdout, /undefined/);
+    assert.doesNotMatch(result.stdout, /deploy-secret|claim=/);
+    assert.match(result.stdout, /http:\/\/works\.test\/vibehub\/_preview\/demo\//);
   } finally {
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }
@@ -170,7 +172,7 @@ test('status 同时展示完成度与验证覆盖率', async () => {
   }
 });
 
-test('status 为待审版本换取短期预览地址，不输出裸地址', async () => {
+test('status 只显示无凭证预览地址，不签发或输出 bearer claim', async () => {
   let grants = 0;
   const server = createServer((req, res) => {
     if (req.url === '/api/skill/project') {
@@ -200,9 +202,10 @@ test('status 为待审版本换取短期预览地址，不输出裸地址', asyn
       cwd: resolve('..'), env: { ...process.env, HOME: home, VIBEHUB_API: api },
     });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(grants, 1);
-    assert.match(result.stdout, /claim=short-lived/);
-    assert.doesNotMatch(result.stdout, /preview123456789\/\s*$/m);
+    assert.equal(grants, 0);
+    assert.doesNotMatch(result.stdout, /claim=short-lived|claim=/);
+    assert.match(result.stdout, /http:\/\/works\.test\/vibehub\/_preview\/preview123456789\//);
+    assert.match(result.stdout, /vibehub open/);
   } finally {
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }
@@ -241,7 +244,8 @@ test('open 为待审版本换取短期预览地址后再打开', async () => {
     });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(readFileSync(capture, 'utf8'), 'http://works.test/vibehub/_preview/preview123456789/?claim=short-lived');
-    assert.match(result.stdout, /claim=short-lived/);
+    assert.doesNotMatch(result.stdout, /claim=short-lived|claim=/);
+    assert.match(result.stdout, /已在浏览器打开安全预览/);
   } finally {
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }

@@ -449,26 +449,42 @@ test('HTTP 探测会检查入口与同一预览目录的静态资源，浏览器
   }
 });
 
-test('HTTP 探测把短期 preview claim 传给同目录静态资源', async () => {
+test('HTTP 探测用 claim 换取 cookie 后跟随干净重定向，资源 URL 和诊断证据不再携带 claim', async () => {
   const requested = [];
   const server = createServer((req, res) => {
-    requested.push(req.url);
-    if (req.url === '/vibehub/_preview/p1/?claim=probe-claim') {
-      res.writeHead(200, { 'content-type': 'text/html' });
-      return res.end('<link href="style.css">');
+    requested.push({ url: req.url, cookie: req.headers.cookie || '' });
+    if (req.url === '/vibehub/_preview/p1/?theme=dark&claim=probe-claim') {
+      res.writeHead(303, {
+        location: '/vibehub/_preview/p1/?theme=dark',
+        'set-cookie': 'vh_preview_p1=cookie-claim; Path=/vibehub/_preview/p1; HttpOnly; SameSite=Lax',
+      });
+      return res.end();
     }
-    if (req.url === '/vibehub/_preview/p1/style.css?claim=probe-claim') {
+    if (req.url === '/vibehub/_preview/p1/?theme=dark' && req.headers.cookie === 'vh_preview_p1=cookie-claim') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end('<link href="style.css"><img src="missing.png">');
+    }
+    if (req.url === '/vibehub/_preview/p1/style.css' && req.headers.cookie === 'vh_preview_p1=cookie-claim') {
       res.writeHead(200, { 'content-type': 'text/css' });
       return res.end('body{color:#242321}');
     }
-    res.writeHead(404); return res.end('missing claim');
+    res.writeHead(404); return res.end('missing cookie');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const port = server.address().port;
-    const probe = await probePreviewHttp(`http://127.0.0.1:${port}/vibehub/_preview/p1/?claim=probe-claim`);
-    assert.equal(probe.status, 'ok');
-    assert.ok(requested.includes('/vibehub/_preview/p1/style.css?claim=probe-claim'));
+    const probe = await probePreviewHttp(`http://127.0.0.1:${port}/vibehub/_preview/p1/?theme=dark&claim=probe-claim`);
+    assert.equal(probe.entry_status, 200);
+    assert.equal(probe.status, 'fail');
+    assert.deepEqual(probe.resource_failures.map((item) => item.status), [404]);
+    assert.deepEqual(requested.map((item) => item.url), [
+      '/vibehub/_preview/p1/?theme=dark&claim=probe-claim',
+      '/vibehub/_preview/p1/?theme=dark',
+      '/vibehub/_preview/p1/style.css',
+      '/vibehub/_preview/p1/missing.png',
+    ]);
+    assert.ok(requested.slice(1).every((item) => item.cookie === 'vh_preview_p1=cookie-claim'));
+    assert.doesNotMatch(JSON.stringify(probe), /probe-claim|claim=/);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
@@ -819,11 +835,12 @@ test('本地静态托管拒绝 dotfile，避免绕过 nginx 保护', async () =>
   assert.doesNotMatch(result.body, /should-not-be-readable/);
 });
 
-test('预览匿名访问返回 404，owner 与同课程老师可用短期 claim 加载页面和资源', async () => {
+test('预览匿名访问返回 404，owner 与同课程老师只用 claim 换 cookie，再从无 claim 地址加载页面和资源', async () => {
   const camp = createCamp();
   const owner = createUser(camp.id);
   const project = createProject(camp.id, owner.id);
   const version = addVersion(project.id, owner.id, 1);
+  writeFileSync(join(paths.versions, version.id, 'index.html'), '<main>测试页面</main><script>document.body.dataset.query=location.search</script>');
   writeFileSync(join(paths.versions, version.id, 'style.css'), 'body{color:#242321}');
   activatePreview(project.id, version);
   const ownerToken = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
@@ -839,17 +856,107 @@ test('预览匿名访问返回 404，owner 与同课程老师可用短期 claim 
     assert.match(grant.json().preview_url, new RegExp(`${previewPath.replaceAll('/', '\\/')}\\?claim=`));
     assert.ok(Date.parse(grant.json().expires_at) > Date.now());
 
-    const first = await app.inject({ method: 'GET', url: new URL(grant.json().preview_url).pathname + new URL(grant.json().preview_url).search });
-    assert.equal(first.statusCode, 200);
+    const granted = new URL(grant.json().preview_url);
+    granted.searchParams.set('theme', 'dark');
+    const first = await app.inject({ method: 'GET', url: granted.pathname + granted.search });
+    assert.equal(first.statusCode, 303);
+    assert.equal(first.headers.location, `${previewPath}?theme=dark`);
+    assert.doesNotMatch(first.body, /测试页面|location\.search|claim=/);
     assert.match(first.headers['content-security-policy'], /frame-ancestors/);
     assert.equal(first.headers['referrer-policy'], 'no-referrer');
     const cookie = first.headers['set-cookie'].split(';', 1)[0];
-    const page = await app.inject({ method: 'GET', url: previewPath, headers: { cookie } });
+    assert.doesNotMatch(first.headers['set-cookie'], /Domain=/i);
+    assert.match(first.headers['set-cookie'], /HttpOnly/i);
+    const page = await app.inject({ method: 'GET', url: first.headers.location, headers: { cookie } });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /测试页面/);
     const asset = await app.inject({ method: 'GET', url: `${previewPath}style.css`, headers: { cookie } });
     assert.equal(asset.statusCode, 200);
+    const emptyClaim = await app.inject({ method: 'GET', url: `${previewPath}?claim=`, headers: { cookie } });
+    assert.equal(emptyClaim.statusCode, 404);
+    assert.doesNotMatch(emptyClaim.body, /测试页面|location\.search/);
   }
+});
+
+test('无斜杠和资源上的 claim 也只换 cookie 并 303 到同路径的干净 URL', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  writeFileSync(join(paths.versions, version.id, 'style.css'), 'body{color:#242321}');
+  activatePreview(project.id, version);
+  const token = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${token}` } });
+  const claim = previewClaimFrom(grant.json().preview_url);
+  const base = `/vibehub/_preview/${version.previewId}`;
+
+  for (const [url, location] of [
+    [`${base}?view=compact&claim=${claim}`, `${base}?view=compact`],
+    [`${base}/style.css?claim=${claim}&v=1`, `${base}/style.css?v=1`],
+  ]) {
+    const response = await app.inject({ method: 'GET', url });
+    assert.equal(response.statusCode, 303);
+    assert.equal(response.headers.location, location);
+    assert.doesNotMatch(response.body, /body\{color|claim=/);
+  }
+});
+
+test('签发 token 被邀请码撤销后，已经换取的预览 cookie 立即失效', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const version = addVersion(student.project.id, student.user.id, 1);
+  activatePreview(student.project.id, version);
+  const grant = await app.inject({
+    method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${student.token}` },
+  });
+  const exchange = await app.inject({
+    method: 'GET', url: new URL(grant.json().preview_url).pathname + new URL(grant.json().preview_url).search,
+  });
+  assert.equal(exchange.statusCode, 303);
+  const cookie = exchange.headers['set-cookie'].split(';', 1)[0];
+  const cleanPath = exchange.headers.location;
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 200);
+
+  const { token: teacher } = teacherToken(camp.id);
+  const revoked = await app.inject({
+    method: 'POST', url: `/api/invites/${student.code}/revoke`, headers: { authorization: `Bearer ${teacher}` },
+  });
+  assert.equal(revoked.statusCode, 200);
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 404);
+});
+
+test('owner 被移出课程后，已经换取的预览 cookie 立即失效', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  activatePreview(project.id, version);
+  const token = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${token}` } });
+  const exchange = await app.inject({ method: 'GET', url: new URL(grant.json().preview_url).pathname + new URL(grant.json().preview_url).search });
+  const cookie = exchange.headers['set-cookie'].split(';', 1)[0];
+  const cleanPath = exchange.headers.location;
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 200);
+
+  db.prepare('DELETE FROM camp_members WHERE camp_id=? AND user_id=?').run(camp.id, owner.id);
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 404);
+});
+
+test('签发 token 过期后，已经换取的预览 cookie 立即失效', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  activatePreview(project.id, version);
+  const token = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${token}` } });
+  const exchange = await app.inject({ method: 'GET', url: new URL(grant.json().preview_url).pathname + new URL(grant.json().preview_url).search });
+  const cookie = exchange.headers['set-cookie'].split(';', 1)[0];
+  const cleanPath = exchange.headers.location;
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 200);
+
+  db.prepare('UPDATE tokens SET expires_at=? WHERE user_id=? AND project_id=?').run('2000-01-01T00:00:00.000Z', owner.id, project.id);
+  assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { cookie } })).statusCode, 404);
 });
 
 test('跨项目和跨课程身份不能签发或复用预览 claim', async () => {

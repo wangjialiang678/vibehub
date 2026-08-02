@@ -1,4 +1,4 @@
-import { db } from '../lib/db.js';
+import { db, now } from '../lib/db.js';
 import { isTeacher } from '../lib/auth.js';
 import { previewUrl } from '../lib/config.js';
 import { issuePreviewClaim, verifyPreviewClaim } from '../lib/preview-claims.js';
@@ -19,17 +19,18 @@ function isActive(row) {
 
 function identityCanPreview(row, identity) {
   if (!row || !identity || identity.camp_id !== row.camp_id) return false;
+  const membership = db.prepare('SELECT role FROM camp_members WHERE camp_id=? AND user_id=?')
+    .get(row.camp_id, identity.user_id);
+  if (!membership || membership.role !== identity.role) return false;
   const owner = identity.user_id === row.owner_user_id && identity.project_id === row.project_id;
   if (owner) return true;
   if (!isTeacher(identity.role)) return false;
-  const membership = db.prepare('SELECT role FROM camp_members WHERE camp_id=? AND user_id=?')
-    .get(row.camp_id, identity.user_id);
   return isTeacher(membership?.role);
 }
 
 export function createPreviewGrant(previewId, identity) {
   const row = activePreview(previewId);
-  if (!isActive(row) || !identityCanPreview(row, identity)) return null;
+  if (!identity?.id || !isActive(row) || !identityCanPreview(row, identity)) return null;
   const issued = issuePreviewClaim({ previewId, versionId: row.version_id, projectId: row.project_id, identity });
   const url = new URL(previewUrl(previewId));
   url.searchParams.set('claim', issued.claim);
@@ -39,12 +40,17 @@ export function createPreviewGrant(previewId, identity) {
 export function authorizePreviewRequest(previewId, claim) {
   const payload = verifyPreviewClaim(claim, previewId);
   if (!payload) return null;
+  const issuer = db.prepare(`SELECT * FROM tokens WHERE id=? AND revoked_at IS NULL
+                             AND (expires_at IS NULL OR expires_at>=?)`).get(payload.issuer_token_id, now());
+  if (!issuer || issuer.user_id !== payload.sub || issuer.camp_id !== payload.camp_id ||
+      (issuer.project_id || null) !== (payload.scope_project_id || null) || issuer.role !== payload.role) return null;
   const row = activePreview(previewId);
   const identity = {
-    user_id: payload.sub,
-    camp_id: payload.camp_id,
-    project_id: payload.scope_project_id,
-    role: payload.role,
+    id: issuer.id,
+    user_id: issuer.user_id,
+    camp_id: issuer.camp_id,
+    project_id: issuer.project_id,
+    role: issuer.role,
   };
   if (!isActive(row) || row.version_id !== payload.vid || row.project_id !== payload.project_id ||
       !identityCanPreview(row, identity)) return null;

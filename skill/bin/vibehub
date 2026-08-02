@@ -52,6 +52,15 @@ async function grantPreview(url) {
   return grant.preview_url;
 }
 
+function cleanPreviewUrl(url) {
+  if (!url) return url;
+  try {
+    const cleaned = new URL(url);
+    cleaned.searchParams.delete('claim');
+    return cleaned.toString();
+  } catch { return url; }
+}
+
 // ── 打包 ─────────────────────────────────────────────────────────────
 const IGNORE = new Set([
   'node_modules', '.git', '.DS_Store', 'dist.tgz', '.vibehub', 'venv', '__pycache__', '.venv',
@@ -144,7 +153,7 @@ const cmds = {
   async status() {
     const s = await api('/api/skill/project');
     const p = s.project;
-    const pendingPreviewUrl = s.pending_version?.preview_url ? await grantPreview(s.pending_version.preview_url) : null;
+    const pendingPreviewUrl = cleanPreviewUrl(s.pending_version?.preview_url);
     say(`\n${c.bold}${p.title}${c.x}  ${c.d}${s.camp.name}${c.x}`);
     say(`${c.d}────────────────────────────────${c.x}`);
     const statusText = { unpublished: '还没上线', published: '已上线', published_with_pending: '已上线（有新版本待审核）', suspended: '已下线' };
@@ -152,6 +161,7 @@ const cmds = {
     if (s.live_version) say(`线上版本  ${c.g}${s.live_version.label}${c.x}   ${p.live_url || ''}`);
     if (s.pending_version) {
       say(`待审版本  ${c.y}${s.pending_version.label}${c.x}   ${pendingPreviewUrl}`);
+      say(`          ${c.d}运行 vibehub open 可安全打开预览${c.x}`);
       say(`          ${c.d}审核通过后才会替换线上版本${c.x}`);
     }
     const d = s.latest_diagnosis;
@@ -226,7 +236,8 @@ const cmds = {
     if (!res.ok) die(data.error?.message || '提交失败', data.error?.hint);
 
     say(`\n${c.g}✓${c.x} ${data.label} 已提交`);
-    say(`  预览  ${c.b}${data.preview_url}${c.x}`);
+    say(`  预览  ${c.b}${cleanPreviewUrl(data.preview_url)}${c.x}`);
+    say(`  ${c.d}安全预览已准备，可运行 vibehub open 打开${c.x}`);
     if (data.rewrites) say(`  ${c.d}自动修正了 ${data.rewrites} 处绝对路径引用（作品跑在子目录下）${c.x}`);
     if (Number.isFinite(data.diagnosis?.score)) {
       const conclusion = data.diagnosis.summary ? ` — ${data.diagnosis.summary}` : '';
@@ -241,10 +252,11 @@ const cmds = {
   async open() {
     loadCred();
     const s = await api('/api/skill/project');
-    const url = s.pending_version?.preview_url ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
+    const openingPreview = !!s.pending_version?.preview_url;
+    const url = openingPreview ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
     if (!url) die('还没有可打开的版本。', '先运行 vibehub deploy');
     execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
-    say(`已打开 ${url}`);
+    say(openingPreview ? '已在浏览器打开安全预览' : `已打开 ${url}`);
   },
 
   async logs() {
