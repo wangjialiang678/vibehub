@@ -1,6 +1,6 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -165,6 +165,83 @@ test('status 同时展示完成度与验证覆盖率', async () => {
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /完成度\s+\x1B\[1m82%/);
     assert.match(result.stdout, /验证覆盖率\s+57%/);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});
+
+test('status 为待审版本换取短期预览地址，不输出裸地址', async () => {
+  let grants = 0;
+  const server = createServer((req, res) => {
+    if (req.url === '/api/skill/project') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        project: { title: '测试作品', publish_status: 'unpublished' },
+        camp: { name: '测试营' },
+        pending_version: { label: 'v0.2.0', preview_url: 'http://works.test/vibehub/_preview/preview123456789/' },
+        latest_diagnosis: null,
+      }));
+    }
+    if (req.method === 'POST' && req.url === '/api/previews/preview123456789/grant') {
+      grants += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ preview_url: 'http://works.test/vibehub/_preview/preview123456789/?claim=short-lived' }));
+    }
+    req.resume();
+    res.writeHead(404).end();
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-status-preview-home-');
+  mkdirSync(join(home, '.vibehub'));
+  writeFileSync(join(home, '.vibehub', 'credentials.json'), JSON.stringify({ token: 'test-token', api }));
+
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'status'], {
+      cwd: resolve('..'), env: { ...process.env, HOME: home, VIBEHUB_API: api },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(grants, 1);
+    assert.match(result.stdout, /claim=short-lived/);
+    assert.doesNotMatch(result.stdout, /preview123456789\/\s*$/m);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});
+
+test('open 为待审版本换取短期预览地址后再打开', async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/api/skill/project') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        project: { title: '测试作品', publish_status: 'published_with_pending', live_url: 'http://works.test/vibehub/learner/live/' },
+        pending_version: { label: 'v0.2.0', preview_url: 'http://works.test/vibehub/_preview/preview123456789/' },
+      }));
+    }
+    if (req.method === 'POST' && req.url === '/api/previews/preview123456789/grant') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ preview_url: 'http://works.test/vibehub/_preview/preview123456789/?claim=short-lived' }));
+    }
+    req.resume();
+    res.writeHead(404).end();
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-open-preview-home-');
+  const bin = tempDir('vh-cli-open-bin-');
+  const capture = join(tempDir('vh-cli-open-capture-'), 'url.txt');
+  const openCommand = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  mkdirSync(join(home, '.vibehub'));
+  writeFileSync(join(home, '.vibehub', 'credentials.json'), JSON.stringify({ token: 'test-token', api }));
+  writeFileSync(join(bin, openCommand), '#!/bin/sh\nprintf %s "$1" > "$VIBEHUB_OPEN_CAPTURE"\n');
+  chmodSync(join(bin, openCommand), 0o755);
+
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'open'], {
+      cwd: resolve('..'),
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, VIBEHUB_API: api, VIBEHUB_OPEN_CAPTURE: capture },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(readFileSync(capture, 'utf8'), 'http://works.test/vibehub/_preview/preview123456789/?claim=short-lived');
+    assert.match(result.stdout, /claim=short-lived/);
   } finally {
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }

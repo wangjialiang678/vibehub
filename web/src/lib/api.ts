@@ -43,6 +43,7 @@ function parseInviteCodes(csv: string, maskedCode: string) {
 export const api = {
   me: () => request<MeResponse>('/api/me'),
   project: (id: string) => request<ProjectSnapshot>(`/api/projects/${encodeURIComponent(id)}`),
+  previewGrant: (previewId: string) => request<{ preview_url: string; expires_at: string }>(`/api/previews/${encodeURIComponent(previewId)}/grant`, { method: 'POST' }),
   versions: (id: string) => request<VersionsResponse>(`/api/projects/${encodeURIComponent(id)}/versions`),
   reviews: () => request<ReviewsResponse>('/api/reviews?status=pending'),
   review: (id: string) => request<ReviewDetail>(`/api/reviews/${encodeURIComponent(id)}`),

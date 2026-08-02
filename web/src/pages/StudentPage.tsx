@@ -29,7 +29,7 @@ function NoProject({ campSlug }: { campSlug: string }) {
 
 function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; userName: string }) {
   const { project, camp, pending_version: pending, live_version: live, latest_diagnosis: diagnosis, stats, timeline, last_review: review } = snapshot;
-  const previewUrl = pending?.preview_url || live?.preview_url || null;
+  const previewUrl = pending?.preview_url || project.live_url || null;
   const status = getProjectStatus({ publish_status: project.publish_status, pending_version: pending, last_review: review });
   const qrImage = useQrCode(project.live_url);
   const [notice, setNotice] = useState<string | null>(null);

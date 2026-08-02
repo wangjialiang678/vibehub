@@ -51,9 +51,9 @@ vibehub deploy --summary "本次做了什么" --flows "上传声音,查看地图
 ## 查看状态
 
 ```bash
-vibehub status     # 当前状态 + AI 诊断 + 下一步建议
+vibehub status     # 当前状态 + AI 诊断 + 下一步建议；待审预览链接约 10 分钟有效
 vibehub logs       # 最近的提交与审核记录（含老师的退回意见）
-vibehub open       # 浏览器打开作品
+vibehub open       # 有待审版本时打开短期预览，否则打开正式作品
 ```
 
 `status` 会显示完成度、验证覆盖率和逐项得分。**跟学员解释时要说清楚**：
@@ -83,6 +83,8 @@ vibehub.storage.get('draft');
 
 `vibehub status` 会显示老师的意见。按意见改完，重新 `vibehub deploy` 就行。
 **已经上线的旧版本不受影响**，访客看到的还是那个能用的版本。
+
+预览链接只给项目本人和本课程老师使用，短期有效；不要把它当正式网址转发。版本被退回、被新提交替代或审核发布后，旧预览会立即失效。
 
 ## 你（AI）该注意的
 

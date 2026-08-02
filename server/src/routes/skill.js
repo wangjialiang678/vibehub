@@ -10,6 +10,7 @@ import { makePreview, versionDir } from '../services/publish.js';
 import { runDiagnosis, scanArtifactSecrets } from '../services/diagnosis.js';
 import { projectSnapshot } from './_shared.js';
 import { assertProjectedQuota, ProjectQuotaError, pruneProjectArtifacts } from '../services/storage.js';
+import { createPreviewGrant } from '../services/preview-access.js';
 
 const err = (reply, code, status, message, hint) =>
   reply.code(status).send({ error: { code, message, hint } });
@@ -179,12 +180,15 @@ export default async function skillRoutes(app, { diagnosisQueue }) {
 
       const queued = diagnosisQueue.enqueue({
         versionId: vid, projectId, campId: project.camp_id, versionDir: dir,
-        previewUrl: previewUrl(previewId), flows: meta.flows || [],
+        previewUrl: () => createPreviewGrant(previewId, req.auth)?.preview_url, flows: meta.flows || [],
       });
+      const previewGrant = createPreviewGrant(previewId, req.auth);
+      if (!previewGrant) throw new Error('preview grant unavailable after submission');
 
       return reply.code(201).send({
         version_id: vid, seq, label,
-        preview_url: previewUrl(previewId),
+        preview_url: previewGrant.preview_url,
+        preview_expires_at: previewGrant.expires_at,
         rewrites: rewrites.length,
         deployment: { status: 'ready' },
         diagnosis: { id: queued.diagnosisId, status: 'running' },

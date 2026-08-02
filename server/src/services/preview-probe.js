@@ -1,4 +1,5 @@
 import { LIMITS } from '../lib/config.js';
+import { redactPreviewClaim } from '../lib/preview-claims.js';
 import { lookup } from 'node:dns/promises';
 
 const STATIC_TAGS = new Set(['script', 'img', 'link', 'source', 'video', 'audio', 'iframe', 'object']);
@@ -35,6 +36,8 @@ function safeStaticUrl(value, entry, basePath) {
   try { url = new URL(value, entry); } catch { return null; }
   // 页面中的任意 JS 都不能诱导探测器跳出这个预览目录访问内网或元数据地址。
   if (url.origin !== entry.origin || !url.pathname.startsWith(basePath)) return null;
+  const claim = entry.searchParams.get('claim');
+  if (claim) url.searchParams.set('claim', claim);
   return url;
 }
 
@@ -122,7 +125,7 @@ export async function probePreviewHttp(previewUrl) {
       remainingReadBytes = Math.max(0, remainingReadBytes - result.bytes);
       resourceChecked += 1;
       if (entryStatus === null) entryStatus = result.status;
-      if (result.status < 200 || result.status >= 300) failures.push({ url: target.href, status: result.status });
+      if (result.status < 200 || result.status >= 300) failures.push({ url: redactPreviewClaim(target.href), status: result.status });
       if (!result.text) continue;
       for (const ref of staticRefs(result.text, result)) {
         const next = safeStaticUrl(ref, entry, basePath);

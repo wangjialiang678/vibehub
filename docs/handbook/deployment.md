@@ -65,6 +65,19 @@ sudo ln -sfn "$REL" /opt/vibehub.tmp
 sudo mv -Tf /opt/vibehub.tmp /opt/vibehub
 ```
 
+首次部署先生成预览 claim 的 HMAC 密钥。密钥只放在服务器配置文件，不进仓库；生产启动时缺失或少于 32 字符会直接失败：
+
+```bash
+sudo install -d -m 0750 -o root -g vibehub /etc/vibehub
+PREVIEW_SECRET="$(openssl rand -hex 32)"
+sudo sh -c "umask 027; printf 'VIBEHUB_PREVIEW_CLAIM_SECRET=%s\n' '$PREVIEW_SECRET' > /etc/vibehub/vibehub.env"
+unset PREVIEW_SECRET
+sudo chown root:vibehub /etc/vibehub/vibehub.env
+sudo chmod 0640 /etc/vibehub/vibehub.env
+```
+
+后续发布必须保留 `/etc/vibehub/vibehub.env`；随意轮换该值会让所有尚未到期的预览 claim 立即失效。
+
 把仓库的 systemd 单元安装为 `/etc/systemd/system/vibehub.service`，然后加载并启动：
 
 ```bash
@@ -99,7 +112,7 @@ sudo rsync -a --delete /tmp/vibehub-console/ /var/www/vibehub-console/
 
 | 仓库文件 | 生产位置与作用 |
 |---|---|
-| `infra/nginx/vibehub-locations.conf` | `/etc/nginx/vibehub-locations.conf`；被官网 `supermind-ai` 的 443 server 引入，提供作品、SDK、BaaS 与浏览量接口。 |
+| `infra/nginx/vibehub-locations.conf` | `/etc/nginx/vibehub-locations.conf`；被官网 `supermind-ai` 的 443 server 引入。正式作品仍由 nginx 直出，未审核预览代理到 Node 校验。 |
 | `infra/nginx/vibehub-hub.conf` | `/etc/nginx/sites-enabled/vibehub-hub`；控制台独立的 `hub.supermind-ai.cn` server 块。 |
 
 从部署端同步并安装它们：

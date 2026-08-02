@@ -32,7 +32,7 @@ audience: tech
 │  nginx ─┬─ supermind-ai.cn/vibehub/<user>/<project>/      │
 │         │                         学员作品（静态，正式版）│
 │         ├─ supermind-ai.cn/vibehub/_preview/<pid>/       │
-│         │                         版本预览（不可猜 id）  │
+│         │                 版本预览（Node 校验短期 claim）│
 │         └─ hub.supermind-ai.cn   控制台 + API（独立 origin）│
 │                                                         │
 │  VibeHub 服务                                           │
@@ -127,7 +127,7 @@ Codex 的独立方案主张 **P0 只发静态站，BaaS 放 P1**，以缩小首�
 | 用途 | 域名 | 说明 |
 |---|---|---|
 | 学员作品正式版 | `https://supermind-ai.cn/vibehub/<username>/<projectname>/` | 主域路径式地址 |
-| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | 不可猜，带 `X-Robots-Tag: noindex` |
+| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | Node 校验 10 分钟 HMAC claim，带 `X-Robots-Tag: noindex` |
 | 平台控制台 + API | `https://hub.supermind-ai.cn` | 学员看板、老师审核台和 `/api/*`；与作品不同 origin |
 | 课程集合页 | `hub.supermind-ai.cn/c/<camp-slug>` | 控制台内页面；公开数据接口仍为 `/api/public/*` |
 
@@ -151,9 +151,9 @@ server {
     try_files $rest $rest/index.html /index.html =404;
   }
   location ~ ^/vibehub/_preview/(?<pid>[a-z0-9]{16})(?<rest>/.*)?$ {
-    alias /var/lib/vibehub/previews/$pid;
-    try_files $rest $rest/index.html /index.html =404;
-    add_header X-Robots-Tag "noindex, nofollow" always;
+    proxy_pass http://127.0.0.1:4300;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
   }
   location /baas/ { proxy_pass http://127.0.0.1:4300; }
 }
@@ -167,7 +167,7 @@ server {
 }
 ```
 
-生产配置还将 `/vibehub/_sdk/` 和 `/vibehub/_hit` 回源到 Node；作品静态文件本身由 nginx 直接读取。BaaS 请求的项目路径线索通过请求头透传，但 header 由客户端控制，不能作为安全隔离依据。
+生产配置还将 `/vibehub/_sdk/` 和 `/vibehub/_hit` 回源到 Node。正式作品静态文件仍由 nginx 直接读取；**未审核预览是唯一例外**，必须回源 Node 校验短期 claim 与当前版本状态。BaaS 请求的项目路径线索通过请求头透传，但 header 由客户端控制，不能作为安全隔离依据。
 
 `try_files ... /index.html` 让学员写的前端路由（AI 很爱生成 SPA 路由）不会 404。
 
@@ -524,8 +524,8 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 | 压缩包路径穿越 / 炸弹 | §4.3 解包规则 |
 | BaaS 接口被刷 | 按项目配额 + 令牌桶限流 + 单条大小限制 |
 | 作品内容违规 | **发布前人工审核**（产品设计已强制）；AI 调用走网关的安全过滤；可选自动内容扫描 |
-| 预览地址被搜索引擎收录 | 16 位不可猜 id + `X-Robots-Tag: noindex` |
-| 平台被作品拖垮 | 作品是纯静态文件，由 nginx 直接 serve，**不经过 Node 进程**，性能与作品数量无关 |
+| 未审核预览泄露或被搜索引擎收录 | 16 位 id 只负责定位；访问需 10 分钟 HMAC claim，绑定版本/项目/身份并在每次请求重查待审状态；匿名与越权返回 404，另加 `X-Robots-Tag: noindex` |
+| 平台被作品拖垮 | 正式作品由 nginx 直接 serve；仅低频的未审核预览经过 Node 做授权后读取静态文件 |
 | 邀请码泄露被冒用 | 码绑定后状态变更；限制 `max_devices`；老师可即时撤销并级联吊销 token |
 
 **合规责任**：作品挂在已备案的 `supermind-ai.cn` 下，内容责任落在备案主体上。产品设计里「发布前必须老师审核」正是这条责任的技术落实，不能为了效率去掉。若涉及未成年人，默认可见性设为昵称公开（〔决策 5〕）。

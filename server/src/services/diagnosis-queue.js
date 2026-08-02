@@ -55,7 +55,9 @@ export class DiagnosisQueue {
       try {
         let probe;
         try {
-          probe = await this.probePreview(task.previewUrl);
+          const previewUrl = typeof task.previewUrl === 'function' ? task.previewUrl() : task.previewUrl;
+          if (!previewUrl) throw new Error('预览已不再开放');
+          probe = await this.probePreview(previewUrl);
         } catch (error) {
           this.log?.warn({ err: error, version_id: task.versionId }, '预览探测失败，按未验证处理');
           probe = { status: 'unknown', entry_status: null, resource_failures: [], resource_checked: 0, checked_at: now() };

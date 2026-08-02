@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 // 必须在导入服务端模块前确定隔离的数据目录，避免测试污染本机开发数据。
 const dataDir = mkdtempSync(join(tmpdir(), 'vh-routes-'));
 process.env.VIBEHUB_DATA_DIR = dataDir;
 process.env.VIBEHUB_MODEL_GATEWAY_URL = '';
+process.env.VIBEHUB_PREVIEW_CLAIM_SECRET = 'preview-auth-test-secret-at-least-32-bytes';
 
 const { buildApp } = await import('../src/index.js');
 const { db, now } = await import('../src/lib/db.js');
@@ -20,6 +21,8 @@ const { collectFacts, score, summarize } = await import('../src/services/diagnos
 const { projectSnapshot } = await import('../src/routes/_shared.js');
 const { probePreviewHttp } = await import('../src/services/preview-probe.js');
 const { pruneProjectArtifacts, projectDiskUsage } = await import('../src/services/storage.js');
+const { makePreview, publishVersion } = await import('../src/services/publish.js');
+const { redactPreviewClaim } = await import('../src/lib/preview-claims.js');
 
 const app = await buildApp({
   probePreview: async () => ({
@@ -90,7 +93,7 @@ function createProject(campId, ownerId, { publishStatus = 'unpublished', liveVer
 }
 
 function addVersion(projectId, ownerId, seq, { id = nextId('v') } = {}) {
-  const previewId = `preview${sequence}`;
+  const previewId = sequence.toString(36).padStart(16, 'p').slice(-16);
   const dir = join(paths.versions, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'index.html'), '<main>测试页面</main>');
@@ -111,6 +114,24 @@ function addReview({ versionId, projectId, campId, status = 'pending' }) {
 function teacherToken(campId) {
   const teacher = createUser(campId, 'teacher', { displayName: '老师', realName: '老师' });
   return { teacher, token: issueToken({ kind: 'web', userId: teacher.id, campId, role: 'teacher' }) };
+}
+
+function activatePreview(projectId, version) {
+  makePreview({ previewId: version.previewId, versionId: version.id });
+  db.prepare('UPDATE projects SET pending_version_id=? WHERE id=?').run(version.id, projectId);
+}
+
+function previewClaimFrom(url) {
+  return new URL(url).searchParams.get('claim');
+}
+
+function expiredPreviewClaim(claim) {
+  const [encoded] = claim.split('.');
+  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  payload.exp = Math.floor(Date.now() / 1000) - 1;
+  const expiredPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', process.env.VIBEHUB_PREVIEW_CLAIM_SECRET).update(expiredPayload).digest('base64url');
+  return `${expiredPayload}.${signature}`;
 }
 
 async function bindStudent(campId, appInstance = app) {
@@ -426,6 +447,38 @@ test('HTTP 探测会检查入口与同一预览目录的静态资源，浏览器
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
+});
+
+test('HTTP 探测把短期 preview claim 传给同目录静态资源', async () => {
+  const requested = [];
+  const server = createServer((req, res) => {
+    requested.push(req.url);
+    if (req.url === '/vibehub/_preview/p1/?claim=probe-claim') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end('<link href="style.css">');
+    }
+    if (req.url === '/vibehub/_preview/p1/style.css?claim=probe-claim') {
+      res.writeHead(200, { 'content-type': 'text/css' });
+      return res.end('body{color:#242321}');
+    }
+    res.writeHead(404); return res.end('missing claim');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const port = server.address().port;
+    const probe = await probePreviewHttp(`http://127.0.0.1:${port}/vibehub/_preview/p1/?claim=probe-claim`);
+    assert.equal(probe.status, 'ok');
+    assert.ok(requested.includes('/vibehub/_preview/p1/style.css?claim=probe-claim'));
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('预览 claim 在请求日志和诊断证据中会被脱敏', () => {
+  assert.equal(
+    redactPreviewClaim('/vibehub/_preview/p1/?claim=secret-value&asset=1'),
+    '/vibehub/_preview/p1/?claim=[redacted]&asset=1',
+  );
 });
 
 test('提交立即返回，诊断进行中返回上一份报告并标记 stale，审核随后创建', async () => {
@@ -764,6 +817,111 @@ test('本地静态托管拒绝 dotfile，避免绕过 nginx 保护', async () =>
   const result = await app.inject({ method: 'GET', url: `/vibehub/${owner.username}/${project.slug}/.env` });
   assert.equal(result.statusCode, 404);
   assert.doesNotMatch(result.body, /should-not-be-readable/);
+});
+
+test('预览匿名访问返回 404，owner 与同课程老师可用短期 claim 加载页面和资源', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  writeFileSync(join(paths.versions, version.id, 'style.css'), 'body{color:#242321}');
+  activatePreview(project.id, version);
+  const ownerToken = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const { token: teacher } = teacherToken(camp.id);
+  const previewPath = `/vibehub/_preview/${version.previewId}/`;
+
+  const anonymous = await app.inject({ method: 'GET', url: previewPath });
+  assert.equal(anonymous.statusCode, 404);
+
+  for (const token of [ownerToken, teacher]) {
+    const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${token}` } });
+    assert.equal(grant.statusCode, 200);
+    assert.match(grant.json().preview_url, new RegExp(`${previewPath.replaceAll('/', '\\/')}\\?claim=`));
+    assert.ok(Date.parse(grant.json().expires_at) > Date.now());
+
+    const first = await app.inject({ method: 'GET', url: new URL(grant.json().preview_url).pathname + new URL(grant.json().preview_url).search });
+    assert.equal(first.statusCode, 200);
+    assert.match(first.headers['content-security-policy'], /frame-ancestors/);
+    assert.equal(first.headers['referrer-policy'], 'no-referrer');
+    const cookie = first.headers['set-cookie'].split(';', 1)[0];
+    const page = await app.inject({ method: 'GET', url: previewPath, headers: { cookie } });
+    assert.equal(page.statusCode, 200);
+    assert.match(page.body, /测试页面/);
+    const asset = await app.inject({ method: 'GET', url: `${previewPath}style.css`, headers: { cookie } });
+    assert.equal(asset.statusCode, 200);
+  }
+});
+
+test('跨项目和跨课程身份不能签发或复用预览 claim', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  activatePreview(project.id, version);
+
+  const otherOwner = createUser(camp.id);
+  const otherProject = createProject(camp.id, otherOwner.id);
+  const otherToken = issueToken({ kind: 'skill', userId: otherOwner.id, campId: camp.id, projectId: otherProject.id, role: 'student' });
+  const otherCamp = createCamp();
+  const { token: otherTeacher } = teacherToken(otherCamp.id);
+
+  for (const token of [otherToken, otherTeacher]) {
+    const denied = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${token}` } });
+    assert.equal(denied.statusCode, 404);
+  }
+
+  const ownerToken = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${ownerToken}` } });
+  assert.equal(grant.statusCode, 200);
+  const otherVersion = addVersion(otherProject.id, otherOwner.id, 1);
+  activatePreview(otherProject.id, otherVersion);
+  const reused = await app.inject({ method: 'GET', url: `/vibehub/_preview/${otherVersion.previewId}/?claim=${previewClaimFrom(grant.json().preview_url)}` });
+  assert.equal(reused.statusCode, 404);
+});
+
+test('过期、superseded 和 rejected 的预览 claim 都返回 404', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  activatePreview(project.id, version);
+  const reviewId = addReview({ versionId: version.id, projectId: project.id, campId: camp.id });
+  const ownerToken = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${ownerToken}` } });
+  assert.equal(grant.statusCode, 200);
+  const claim = previewClaimFrom(grant.json().preview_url);
+  const previewPath = `/vibehub/_preview/${version.previewId}/`;
+
+  const expired = await app.inject({ method: 'GET', url: `${previewPath}?claim=${expiredPreviewClaim(claim)}` });
+  assert.equal(expired.statusCode, 404);
+
+  db.prepare("UPDATE reviews SET status='superseded' WHERE id=?").run(reviewId);
+  const superseded = await app.inject({ method: 'GET', url: `${previewPath}?claim=${claim}` });
+  assert.equal(superseded.statusCode, 404);
+
+  db.prepare("UPDATE reviews SET status='rejected' WHERE id=?").run(reviewId);
+  db.prepare('UPDATE projects SET pending_version_id=NULL WHERE id=?').run(project.id);
+  const rejected = await app.inject({ method: 'GET', url: `${previewPath}?claim=${claim}` });
+  assert.equal(rejected.statusCode, 404);
+});
+
+test('审核通过后旧预览失效，但正式作品仍公开可访问', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id);
+  const version = addVersion(project.id, owner.id, 1);
+  activatePreview(project.id, version);
+  const ownerToken = issueToken({ kind: 'skill', userId: owner.id, campId: camp.id, projectId: project.id, role: 'student' });
+  const grant = await app.inject({ method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${ownerToken}` } });
+  assert.equal(grant.statusCode, 200);
+  publishVersion({ username: owner.username, slug: project.slug, versionId: version.id });
+  db.prepare("UPDATE projects SET pending_version_id=NULL,live_version_id=?,publish_status='published' WHERE id=?").run(version.id, project.id);
+
+  const oldPreview = await app.inject({ method: 'GET', url: `/vibehub/_preview/${version.previewId}/?claim=${previewClaimFrom(grant.json().preview_url)}` });
+  assert.equal(oldPreview.statusCode, 404);
+  const live = await app.inject({ method: 'GET', url: `/vibehub/${owner.username}/${project.slug}/` });
+  assert.equal(live.statusCode, 200);
+  assert.match(live.body, /测试页面/);
 });
 
 test('reject 的 comment 为空返回 400', async () => {

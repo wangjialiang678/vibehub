@@ -23,9 +23,24 @@ audience: tech
 |---|---|---|
 | 网页用户（学员/老师） | 会话 cookie（**host-only、SameSite=Lax、HttpOnly、Secure**） | 浏览器 |
 | AI 工具（skill） | `Authorization: Bearer <token>` | `~/.vibehub/credentials.json` |
+| 未审核预览 | 10 分钟 HMAC claim（绑定 preview、version、project、用户与课程） | grant 返回的预览 URL + 预览路径专用 HttpOnly cookie |
 | 学员作品运行时 | 由作品 URL 路径映射 project；作品不持有密钥 | SDK 发送路径线索，服务端负责校验 |
 
 **铁律**：服务端一切鉴权只认凭证内嵌的 `scope{camp_id, project_id, role}`，**绝不接受客户端自报的 camp_id / project_id 参数**。请求里出现的 camp/project 参数只用于校验「是否与 scope 一致」，不一致即 403。
+
+### `POST /api/previews/:pid/grant`
+
+网页会话或 skill Bearer token 用该接口换取短期预览地址。只有项目 owner 本人，或项目所在课程的 `teacher` / `admin` 可以签发；匿名、跨项目、跨课程及已经失效的预览统一按不存在处理。
+
+```jsonc
+// ← 200
+{
+  "preview_url": "https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
+  "expires_at": "2026-08-03T01:20:00.000Z"
+}
+```
+
+claim 有效期固定为 10 分钟，绑定 `preview_id + version_id + project_id + user_id + camp_id + role`。Node 在每次预览请求时重新检查版本仍是该项目当前待审版本；版本被 `superseded`、`rejected`、诊断 blocker 清退或正式发布后，即使 claim 尚未到期也返回 404。首次携带 query claim 的响应会种一个仅限该预览路径的 HttpOnly cookie，以便 CSS、JS、图片等子资源继续通过校验。响应一律 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`；Node 请求日志与诊断证据会脱敏 claim，nginx 关闭预览路径 access log，避免短期凭证落盘。
 
 ---
 
@@ -88,7 +103,8 @@ audience: tech
 // meta
 { "label":"v1.2.0", "summary":"新增声音上传与地图筛选", "flows":["上传声音","查看地图"] }
 // ←  201
-{ "version_id":"v_..", "seq":7, "preview_url":"https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/",
+{ "version_id":"v_..", "seq":7, "preview_url":"https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
+  "preview_expires_at":"2026-08-03T01:20:00.000Z",
   "deployment":{"status":"ready"}, "diagnosis":{"status":"running"},
   "review":{"status":"waiting_for_diagnosis"},
   "message":"已生成预览版本，正在做 AI 诊断，随后会自动进入老师的审核队列" }
@@ -234,5 +250,6 @@ SDK 当前发送 `x-vibehub-project` 路径线索，服务端当前按该 header
 | skill 重复提交同一内容 | preflight 按 `sha256` 去重，返回已有 version |
 | 老师同时点两次「审核并发布」 | `reviews` 表带乐观锁（`status='pending'` 作为 WHERE 条件），第二次影响 0 行 → 返回「这个版本已经处理过了」 |
 | 学员在审核过程中又提交新版本 | 新版本入队，旧的 pending review 自动置为 `superseded`，老师队列只显示最新的 |
+| 未审核预览 claim 已签发后版本状态变化 | 每次文件请求都重新检查 `pending_version_id` 与 review 状态，旧 claim 立即返回 404 |
 | 发布切换过程中有访客访问 | `ln -sfn` + `mv -T` 原子替换，访客要么看到旧版要么看到新版，不会 404 |
 | 诊断任务重复入队 | 按 `version_id` 去重，同一版本同时只有一个诊断任务在跑 |

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import QRCode from 'qrcode';
 import { Link } from 'react-router-dom';
-import { readableError } from '../lib/api';
+import { api, readableError } from '../lib/api';
 
 export function PageState({ title = '正在加载…', error, action }: { title?: string; error?: unknown; action?: ReactNode }) {
   return (
@@ -32,7 +32,29 @@ export function StatusPill({ children, tone = 'muted' }: { children: ReactNode; 
 
 export function PreviewFrame({ url, title, className = '' }: { url?: string | null; title: string; className?: string }) {
   if (!url) return <div className={`preview-empty ${className}`}><span>◇</span><p>还没有可展示的预览版本</p><small>完成一次提交后，这里会显示你的真实网页。</small></div>;
-  return <iframe className={`preview-frame ${className}`} title={title} src={url} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" />;
+  return <PreviewFrameContent url={url} title={title} className={className} />;
+}
+
+function previewId(url: string) {
+  try { return /\/vibehub\/_preview\/([a-z0-9]+)\//i.exec(new URL(url).pathname)?.[1] || null; } catch { return null; }
+}
+
+function PreviewFrameContent({ url, title, className }: { url: string; title: string; className: string }) {
+  const pid = previewId(url);
+  const [grant, setGrant] = useState<{ source: string; url?: string; error?: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    if (!pid) return () => { active = false; };
+    setGrant(null);
+    api.previewGrant(pid)
+      .then((result) => { if (active) setGrant({ source: url, url: result.preview_url }); })
+      .catch((error) => { if (active) setGrant({ source: url, error: readableError(error, '这个预览已失效。') }); });
+    return () => { active = false; };
+  }, [pid, url]);
+  if (pid && grant?.source !== url) return <div className={`preview-empty ${className}`}><span>◇</span><p>正在准备安全预览…</p><small>只会向项目本人和本课程老师开放。</small></div>;
+  if (pid && grant?.error) return <div className={`preview-empty ${className}`}><span>!</span><p>这个预览暂时打不开</p><small>{grant.error}</small></div>;
+  const safeUrl = pid ? grant?.url : url;
+  return <iframe className={`preview-frame ${className}`} title={title} src={safeUrl} sandbox="allow-scripts allow-forms allow-popups allow-same-origin" />;
 }
 
 export function WorkThumbnail({ url, coverUrl, title }: { url?: string | null; coverUrl?: string | null; title: string }) {

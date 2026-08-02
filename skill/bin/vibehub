@@ -41,6 +41,17 @@ async function api(path, { method = 'GET', body, token, form } = {}) {
   return data;
 }
 
+function previewId(url) {
+  try { return /\/vibehub\/_preview\/([a-z0-9]+)\//i.exec(new URL(url).pathname)?.[1] || null; } catch { return null; }
+}
+
+async function grantPreview(url) {
+  const pid = previewId(url);
+  if (!pid) return url;
+  const grant = await api(`/api/previews/${encodeURIComponent(pid)}/grant`, { method: 'POST' });
+  return grant.preview_url;
+}
+
 // ── 打包 ─────────────────────────────────────────────────────────────
 const IGNORE = new Set([
   'node_modules', '.git', '.DS_Store', 'dist.tgz', '.vibehub', 'venv', '__pycache__', '.venv',
@@ -133,13 +144,14 @@ const cmds = {
   async status() {
     const s = await api('/api/skill/project');
     const p = s.project;
+    const pendingPreviewUrl = s.pending_version?.preview_url ? await grantPreview(s.pending_version.preview_url) : null;
     say(`\n${c.bold}${p.title}${c.x}  ${c.d}${s.camp.name}${c.x}`);
     say(`${c.d}────────────────────────────────${c.x}`);
     const statusText = { unpublished: '还没上线', published: '已上线', published_with_pending: '已上线（有新版本待审核）', suspended: '已下线' };
     say(`状态      ${statusText[p.publish_status] || p.publish_status}`);
     if (s.live_version) say(`线上版本  ${c.g}${s.live_version.label}${c.x}   ${p.live_url || ''}`);
     if (s.pending_version) {
-      say(`待审版本  ${c.y}${s.pending_version.label}${c.x}   ${s.pending_version.preview_url}`);
+      say(`待审版本  ${c.y}${s.pending_version.label}${c.x}   ${pendingPreviewUrl}`);
       say(`          ${c.d}审核通过后才会替换线上版本${c.x}`);
     }
     const d = s.latest_diagnosis;
@@ -227,9 +239,9 @@ const cmds = {
   },
 
   async open() {
-    const cred = loadCred();
+    loadCred();
     const s = await api('/api/skill/project');
-    const url = s.project.live_url || s.pending_version?.preview_url;
+    const url = s.pending_version?.preview_url ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
     if (!url) die('还没有可打开的版本。', '先运行 vibehub deploy');
     execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
     say(`已打开 ${url}`);

@@ -5,7 +5,7 @@ import { mkdirSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join, normalize } from 'node:path';
 import { db, now } from './lib/db.js';
-import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR, previewUrl } from './lib/config.js';
+import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR } from './lib/config.js';
 import { authRequired, assertProjectAccess, hasAllowedCookieOrigin } from './lib/auth.js';
 import skillRoutes from './routes/skill.js';
 import adminRoutes from './routes/admin.js';
@@ -15,6 +15,8 @@ import { projectSnapshot, diagnosisView } from './routes/_shared.js';
 import { DiagnosisQueue } from './services/diagnosis-queue.js';
 import { probePreviewHttp } from './services/preview-probe.js';
 import { cleanupTmp, diskHealth, pruneProjectArtifacts } from './services/storage.js';
+import { authorizePreviewRequest, createPreviewGrant, previewCookieName } from './services/preview-access.js';
+import { redactPreviewClaim } from './lib/preview-claims.js';
 
 const MIME = { '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.mjs': 'application/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -57,7 +59,20 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   // 版本保留不是只在有新提交时才生效；服务重启也会收敛历史项目的遗留产物。
   for (const project of db.prepare('SELECT id FROM projects').all()) pruneProjectArtifacts(project.id);
 
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL || 'info' }, bodyLimit: 2 * 1024 * 1024 });
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL || 'info',
+      serializers: {
+        req: (request) => ({
+          method: request.method,
+          url: redactPreviewClaim(request.url),
+          host: request.hostname,
+          remoteAddress: request.ip,
+        }),
+      },
+    },
+    bodyLimit: 2 * 1024 * 1024,
+  });
   const diagnosisQueue = new DiagnosisQueue({ probePreview, log: app.log });
   const tmpCleaner = setInterval(() => cleanupTmp(), 10 * 60 * 1000);
   tmpCleaner.unref();
@@ -65,7 +80,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
 
   // 进程重启前已经落盘但尚未完成的诊断不能永远显示「更新中」。复用原记录续跑，
   // 不新建重复任务，也不会让同一 version 同时跑两次。
-  const interrupted = db.prepare(`SELECT d.id AS diagnosis_id,v.id AS version_id,v.project_id,v.flows,v.preview_id,p.camp_id
+  const interrupted = db.prepare(`SELECT d.id AS diagnosis_id,v.id AS version_id,v.project_id,v.flows,v.preview_id,p.camp_id,p.owner_user_id
                                   FROM diagnoses d JOIN versions v ON v.id=d.version_id
                                   JOIN projects p ON p.id=v.project_id WHERE d.status='running'`).all();
   app.addHook('onListen', async () => {
@@ -75,7 +90,10 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
       diagnosisQueue.enqueue({
         diagnosisId: task.diagnosis_id, versionId: task.version_id, projectId: task.project_id,
         campId: task.camp_id, versionDir: join(paths.versions, task.version_id),
-        previewUrl: previewUrl(task.preview_id), flows,
+        previewUrl: () => createPreviewGrant(task.preview_id, {
+          user_id: task.owner_user_id, camp_id: task.camp_id, project_id: task.project_id, role: 'student',
+        })?.preview_url,
+        flows,
       });
     }
   });
@@ -131,6 +149,12 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     return { user, camp, role: req.auth.role, project_id: req.auth.project_id };
   });
 
+  app.post('/api/previews/:pid/grant', { preHandler: authRequired() }, async (req, reply) => {
+    const grant = createPreviewGrant(req.params.pid, req.auth);
+    if (!grant) return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个预览。' } });
+    return reply.header('cache-control', 'no-store').send(grant);
+  });
+
   app.get('/api/projects/:id', { preHandler: authRequired() }, async (req, reply) => {
     const project = db.prepare('SELECT * FROM projects WHERE id=?').get(req.params.id);
     if (!assertProjectAccess(project, req.auth)) return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个项目。' } });
@@ -162,8 +186,39 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   // ── 作品静态托管（本地开发用；生产由 nginx 直接 serve）─────────────
   const sdk = readFileSync(new URL('./runtime/sdk.js', import.meta.url), 'utf8');
   app.get(`${WORKS_PREFIX}/_sdk/vibehub.js`, async (req, reply) => reply.type('application/javascript').send(sdk));
-  app.get(`${WORKS_PREFIX}/_preview/:pid/*`, async (req, reply) => serveFrom(join(paths.previews, req.params.pid), req.params['*'], reply));
-  app.get(`${WORKS_PREFIX}/_preview/:pid`, async (req, reply) => reply.redirect(`${WORKS_PREFIX}/_preview/${req.params.pid}/`));
+  const previewAccess = (req, reply) => {
+    reply.header('x-robots-tag', 'noindex, nofollow');
+    reply.header('cache-control', 'no-store');
+    reply.header('referrer-policy', 'no-referrer');
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('content-security-policy', `frame-ancestors 'self' ${CONSOLE_ORIGIN}`);
+    const cookieName = previewCookieName(req.params.pid);
+    const queryClaim = req.query?.claim;
+    const access = authorizePreviewRequest(req.params.pid, queryClaim || req.cookies?.[cookieName]);
+    if (!access) {
+      reply.code(404).type('text/html').send('<h1>404</h1>');
+      return false;
+    }
+    if (queryClaim) {
+      reply.setCookie(cookieName, queryClaim, {
+        path: `${WORKS_PREFIX}/_preview/${req.params.pid}/`,
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: access.maxAge,
+      });
+    }
+    return true;
+  };
+  app.get(`${WORKS_PREFIX}/_preview/:pid/*`, async (req, reply) => {
+    if (!previewAccess(req, reply)) return reply;
+    return serveFrom(join(paths.previews, req.params.pid), req.params['*'], reply);
+  });
+  app.get(`${WORKS_PREFIX}/_preview/:pid`, async (req, reply) => {
+    if (!previewAccess(req, reply)) return reply;
+    const claim = req.query?.claim ? `?claim=${encodeURIComponent(req.query.claim)}` : '';
+    return reply.redirect(`${WORKS_PREFIX}/_preview/${req.params.pid}/${claim}`);
+  });
 
   app.post(`${WORKS_PREFIX}/_hit`, async (req, reply) => {
     const match = String(req.body?.path || '').match(/\/vibehub\/([a-z0-9][a-z0-9_-]*)\/([a-z0-9][a-z0-9_-]*)\//i);

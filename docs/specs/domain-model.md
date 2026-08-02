@@ -144,6 +144,8 @@ CREATE INDEX idx_versions_project ON versions(project_id, seq DESC);
 
 **版本是不可变的。** 一旦落盘就不再修改——审核、部署、诊断的结果都挂在关联表上，而不是回写版本本身。这保证「访客看到的是哪个版本」永远可追溯。
 
+`preview_id` 只是预览资源的稳定定位符，**不是访问凭证**。访问未审核版本前，项目 owner 或同课程老师/管理员必须用自己的 web session 或 skill token 换取 10 分钟 HMAC claim。claim 同时绑定 `preview_id`、`version_id`、`project_id` 与授权身份；服务端仍以当前 `projects.pending_version_id` 和最新 review 状态作为最终准入条件。
+
 ### 1.6 deployments — 部署记录
 
 ```sql
@@ -252,6 +254,7 @@ not_started ──首次提交──▶ developing ──提交成功──▶ s
 - 部署失败**不创建**审核任务——老师不应该看到一个打不开的版本。
 - `approved` 后立即触发发布切换（见 §2.4）。
 - `rejected` 后 `projects.pending_version_id` 置空，`dev_status` 转 `needs_revision`，**但 `live_version_id` 保持不变**——需求文档 §7.6：「如果新版本被驳回，已经正式发布的旧版本应继续保持可访问。」
+- `superseded`、`rejected`、诊断 blocker 清退以及 `approved` 发布都会让旧预览立即失效；已经签发但尚未到期的 claim 也不能继续访问。
 
 ### 2.4 发布状态（project.publish_status）
 
@@ -320,6 +323,8 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 访客能看到的东西（需求文档 §13.3 的硬边界，在查询层强制）：
 - ✅ 已发布项目的 `live_version_id` 内容、标题、简介、昵称、浏览量
 - ❌ 邀请码、未发布版本、AI 诊断报告、审核记录、真实姓名、任何内部管理数据
+
+未发布版本不属于公开可见性范围：裸 `/vibehub/_preview/<pid>/` 请求返回 404。owner 与同课程老师/管理员只能通过短期 claim 查看；跨项目和跨课程同样返回 404，避免泄露预览是否存在。
 
 ---
 

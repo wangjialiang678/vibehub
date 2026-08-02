@@ -94,6 +94,23 @@ case "$DSTATUS" in
   *) bad "诊断没在超时内完成（status=${DSTATUS}）";;
 esac
 
+# ── 3b. 未审核预览访问控制 ─────────────────────────────────────
+step "预览访问控制"
+PREV_URL="$(req -H "Authorization: Bearer $STOK" "$API/api/skill/project" | jqp "d['pending_version']['preview_url']")"
+PREV="$(echo "$PREV_URL" | grep -oE '_preview/[a-z0-9]+' | head -1 | cut -d/ -f2)"
+ANON_PREVIEW="$(req -o /dev/null -w '%{http_code}' "$API/vibehub/_preview/$PREV/")"
+if [ "$ANON_PREVIEW" = "404" ] || [ "$ANON_PREVIEW" = "401" ]; then
+  ok "匿名访问未审核预览被拒（${ANON_PREVIEW}）"
+else
+  bad "匿名访问未审核预览返回 ${ANON_PREVIEW}（应 404/401）"
+fi
+OWNER_PREVIEW="$(req -X POST -H "Authorization: Bearer $STOK" "$API/api/previews/$PREV/grant" | jqp "d.get('preview_url','')")"
+OWNER_HC="$(req -L -c "$TMP/owner-preview.cookies" -o /dev/null -w '%{http_code}' "$OWNER_PREVIEW")"
+[ "$OWNER_HC" = "200" ] && ok "owner 可访问未审核预览" || bad "owner 预览返回 ${OWNER_HC}（应 200）"
+TEACHER_PREVIEW="$(req -X POST -H "Authorization: Bearer $TEACHER_TOKEN" "$API/api/previews/$PREV/grant" | jqp "d.get('preview_url','')")"
+TEACHER_HC="$(req -L -c "$TMP/teacher-preview.cookies" -o /dev/null -w '%{http_code}' "$TEACHER_PREVIEW")"
+[ "$TEACHER_HC" = "200" ] && ok "同课程老师可访问未审核预览" || bad "老师预览返回 ${TEACHER_HC}（应 200）"
+
 # ── 4. 老师审核 → 发布 → 正式地址可访问 ──────────────────────
 step "审核发布"
 RID="$(req -H "Authorization: Bearer $TEACHER_TOKEN" "$API/api/reviews?status=pending" | jqp "d['items'][0]['id']")"
@@ -114,7 +131,6 @@ step "安全回归"
 # #6 .env 泄露：造一个带 .env 的包重新 deploy，.env 不得可访问
 printf 'API_KEY=sk-loop-secret\n' > "$WORK/.env"
 (cd "$WORK" && cli deploy --summary "带env" >/dev/null 2>&1)
-PREV="$(cli status 2>/dev/null | grep -oE '_preview/[a-z0-9]+' | head -1 | cut -d/ -f2)"
 ENVHC="$(req -o /dev/null -w '%{http_code}' "$API/vibehub/_preview/$PREV/.env")"
 [ "$ENVHC" = "404" ] && ok "#6 .env 不落盘（404）" || bad "#6 .env 泄露！HTTP $ENVHC"
 rm -f "$WORK/.env"
