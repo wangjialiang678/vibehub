@@ -16,15 +16,38 @@ export const CONSOLE_ORIGIN = env.VIBEHUB_CONSOLE_ORIGIN || `http://localhost:51
 export const WORKS_ORIGIN = env.VIBEHUB_WORKS_ORIGIN || `http://localhost:${PORT}`;
 export const WORKS_PREFIX = env.VIBEHUB_WORKS_PREFIX || '/vibehub';
 
+export function validatePreviewOriginTemplate(template) {
+  if ((String(template).match(/\{previewId\}/g) || []).length !== 1) {
+    throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须且只能包含一个 {previewId}');
+  }
+  const previewIds = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb'];
+  const urls = previewIds.map((previewId) => {
+    let url;
+    try { url = new URL(String(template).replace('{previewId}', previewId)); }
+    catch { throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 不是合法 URL'); }
+    if (url.username || url.password || url.pathname !== '/' || url.search || url.hash ||
+        !['http:', 'https:'].includes(url.protocol)) {
+      throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须生成无凭据、无路径的 HTTP(S) origin');
+    }
+    if (!url.hostname.includes(previewId)) {
+      throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须为每个 previewId 生成独立 hostname');
+    }
+    return url;
+  });
+  if (urls[0].hostname === urls[1].hostname) {
+    throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须为每个 previewId 生成独立 hostname');
+  }
+  return template;
+}
+
 // 每个未审核预览必须拥有独立 origin。只换 host-only cookie 但仍共用 origin 时，
 // 恶意作品可以跨路径 fetch 浏览器已授权的另一个预览并读取响应。
-export const PREVIEW_ORIGIN_TEMPLATE = env.VIBEHUB_PREVIEW_ORIGIN_TEMPLATE ||
-  (env.NODE_ENV === 'production'
-    ? 'https://{previewId}.preview.supermind-ai.cn'
-    : `http://{previewId}.preview.localhost:${PORT}`);
-if ((PREVIEW_ORIGIN_TEMPLATE.match(/\{previewId\}/g) || []).length !== 1) {
-  throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须且只能包含一个 {previewId}');
-}
+export const PREVIEW_ORIGIN_TEMPLATE = validatePreviewOriginTemplate(
+  env.VIBEHUB_PREVIEW_ORIGIN_TEMPLATE ||
+    (env.NODE_ENV === 'production'
+      ? 'https://{previewId}.preview.supermind-ai.cn'
+      : `http://{previewId}.preview.localhost:${PORT}`),
+);
 
 // 模型网关使用营地中台已经提供的 OpenAI 兼容接口。token 只从运行环境读取，
 // 未配置时诊断仍会以模板文案交付，不能因为模型故障卡住学员提交。
