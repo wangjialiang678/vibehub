@@ -7,7 +7,7 @@ audience: tech
 
 # VibeHub 架构设计
 
-> ⚠️ **同步提示**：本文部分早期章节描述子域名方案，已被 `decisions-r1.md` 否决为路径式；以 `decisions-r1.md` 和实际实现为准。
+> ⚠️ **同步提示**：正式作品按 `decisions-r1.md` 保留路径式；安全复核后，未审核预览单独改为逐 `preview_id` 子域。两者不要混为一套域名策略。
 
 > 本文回答需求文档 §15「当前文档暂不定义」的那七件事——它们恰好是能不能开营的关键。
 >
@@ -31,8 +31,8 @@ audience: tech
 │                                                         │
 │  nginx ─┬─ supermind-ai.cn/vibehub/<user>/<project>/      │
 │         │                         学员作品（静态，正式版）│
-│         ├─ supermind-ai.cn/vibehub/_preview/<pid>/       │
-│         │                 版本预览（Node 校验短期 claim）│
+│         ├─ <pid>.preview.supermind-ai.cn/vibehub/...     │
+│         │      独立 origin 版本预览（Node 校验短期 claim）│
 │         └─ hub.supermind-ai.cn   控制台 + API（独立 origin）│
 │                                                         │
 │  VibeHub 服务                                           │
@@ -70,7 +70,7 @@ const url  = await vibehub.upload(fileBlob);          // 返回可直接用的�
 const text = await vibehub.ai('把这段描述润色一下：' + input); // 【规划中，当前未实现】
 ```
 
-对应三组已实现能力和一组规划能力。项目身份的规范来源是作品正式版或预览版的 **URL 路径**，不是 Host；服务端不得把客户端自报的 header 或 project id 当作授权依据（当前实现中的 header 只能视为非可信路径线索，见 §2.1b）：
+对应三组已实现能力和一组规划能力。正式作品的项目身份来源是固定正式 origin + URL 路径；预览版必须由逐 preview origin 与 path 中相同的 `preview_id` 共同确认。服务端不得把客户端自报的 header 或 project id 当作授权依据（见 §2.1b）：
 
 | 能力 | 接口 | 配额（每项目） |
 |---|---|---|
@@ -88,12 +88,12 @@ const text = await vibehub.ai('把这段描述润色一下：' + input); // 【�
 > **浏览器里的「项目标识」只能是可公开的路由标识，不能当成密钥。** 任何写进静态产物的东西都等于公开。
 
 真正的保护来自服务端，而不是"把 key 藏在前端"：
-- 项目身份来自 `/vibehub/<username>/<project>/` 或 `/vibehub/_preview/<pid>/` 的路径映射，不由 Host 推导；服务端不得信任客户端自报的 project header。当前 SDK 会发送 `x-vibehub-project` 路径线索，当前 BaaS 实现按该 header 优先、`Referer` 兜底解析；两者都可由客户端伪造，因此不是安全边界
+- 正式项目身份来自 `supermind-ai.cn` + `/vibehub/<username>/<project>/`；预览项目身份来自 `<pid>.preview.supermind-ai.cn` + `/vibehub/_preview/<pid>/`，host/path 必须一致。服务端忽略客户端自报的 project header，只把经过 origin/path 校验的 `Referer` 当公开路由线索
 - 每项目的配额、限流、单条大小、内容过滤全在服务端强制
 - 上游模型 API key **永不下发**，AI 调用一律经平台网关中转
 - 需要"只有作者能写"的作品，走**服务端签发的短期会话**，而不是硬编码 token
 
-> **同源威胁模型（路径式的关键代价）**：一句话：**作品之间共享同一 origin，SDK 命名空间不是安全边界。** 所有正式作品、预览和主站路径共享 `https://supermind-ai.cn` 这一个 origin。作品之间的 `localStorage`、`IndexedDB` 和浏览器权限是共享的；SDK 的 `vh:` 命名空间只是约定，不是安全边界。任何作品里的 JavaScript 都可能绕过 SDK，直接读取或修改同源存储、调用同源接口，因此不能把作品之间当成已经隔离的租户。`hub.supermind-ai.cn` 是独立 origin，只用于把控制台的 host-only 登录 cookie 移出作品执行面，不能解决作品之间的同源风险。
+> **同源威胁模型（路径式正式作品的关键代价）**：一句话：**正式作品之间共享同一 origin，SDK 命名空间不是安全边界。** 正式作品和主站路径共享 `https://supermind-ai.cn`，其 `localStorage`、`IndexedDB` 和浏览器权限也是共享的。未审核预览不再加入这个执行面：每个 `preview_id` 使用不同 origin、host-only cookie 与 `Cross-Origin-Resource-Policy: same-origin`，Node 还拒绝其他预览 origin 的请求。`hub.supermind-ai.cn` 则把控制台登录态移出所有作品执行面。
 
 > BaaS 的默认策略是"公开可读、限流可写"——营地场景下作品需要访客能留言/上传，做强鉴权反而做不出想要的作品。代价是数据可能被恶意写入，缓解手段是配额 + 内容过滤 + 老师可一键清空某个 collection。**这条取舍需要第 2 轮跟 Michael 确认**（见 api.md §5）。
 
@@ -127,15 +127,15 @@ Codex 的独立方案主张 **P0 只发静态站，BaaS 放 P1**，以缩小首�
 | 用途 | 域名 | 说明 |
 |---|---|---|
 | 学员作品正式版 | `https://supermind-ai.cn/vibehub/<username>/<projectname>/` | 主域路径式地址 |
-| 版本预览 | `https://supermind-ai.cn/vibehub/_preview/<pid16>/` | Node 用 10 分钟 HMAC claim 换路径 cookie，303 清除 query，带 `X-Robots-Tag: noindex` |
+| 版本预览 | `https://<pid16>.preview.supermind-ai.cn/vibehub/_preview/<pid16>/` | 每个版本独立 origin；Node 用 10 分钟 HMAC claim 换 host-only 路径 cookie，303 清除 query，带 `X-Robots-Tag: noindex` |
 | 平台控制台 + API | `https://hub.supermind-ai.cn` | 学员看板、老师审核台和 `/api/*`；与作品不同 origin |
 | 课程集合页 | `hub.supermind-ai.cn/c/<camp-slug>` | 控制台内页面；公开数据接口仍为 `/api/public/*` |
 
-**为什么控制台要放在 `hub`**：路径式作品与主站同源，作品 JavaScript 不能读取 `hub` 的 host-only cookie；但这只是控制面隔离，不代表作品之间已经独立 origin。
+**为什么控制台要放在 `hub`**：路径式正式作品与主站同源，作品 JavaScript 不能读取 `hub` 的 host-only cookie。未审核预览另用逐版本子域，防止恶意待审作品读取另一个已授权预览。
 
 ### 3.2 证书
 
-路径式方案只需要普通证书：为 `supermind-ai.cn`（可包含 `www`）和 `hub.supermind-ai.cn` 配置普通 HTTPS 证书，使用 **HTTP-01** 验证；不需要通配证书、泛解析、DNS-01 或 DNS 服务商 API 凭证。另需腾讯云防火墙放行 443。
+正式路径和控制台使用 `supermind-ai.cn`（可包含 `www`）与 `hub.supermind-ai.cn` 的普通 HTTPS 证书。预览还需要 `*.preview.supermind-ai.cn` 泛解析和通配证书；通配证书通常通过 **DNS-01** 签发。另需腾讯云防火墙放行 443。这些都是生产启用独立预览 origin 的上线前置条件。
 
 > **HTTPS 不是可选项。** 原型里的「城市声音地图」要录音——`getUserMedia` 只在安全上下文（HTTPS）下可用。地理位置、剪贴板等 API 同理。没有 HTTPS，一半的作品做不出来。这一条把 §3.2 从"运维待办"提升为"P0 阻塞项"。
 
@@ -150,12 +150,21 @@ server {
     alias /var/lib/vibehub/sites/$user/$project;
     try_files $rest $rest/index.html /index.html =404;
   }
-  location ~ ^/vibehub/_preview/(?<pid>[a-z0-9]{16})(?<rest>/.*)?$ {
+  location ~ "^/vibehub/_preview/[a-z0-9]{16}(/.*)?$" { return 404; }
+  location /baas/ { proxy_pass http://127.0.0.1:4300; }
+}
+
+# 未审核预览：逐 preview_id 独立 origin
+server {
+  listen 443 ssl http2;
+  server_name "~^(?<pid>[a-z0-9]{16})\.preview\.supermind-ai\.cn$";
+  access_log off;
+  error_log /dev/null crit;
+  location ~ "^/vibehub/_preview/[a-z0-9]{16}(/.*)?$" {
     proxy_pass http://127.0.0.1:4300;
     proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto $scheme;
   }
-  location /baas/ { proxy_pass http://127.0.0.1:4300; }
+  location / { return 404; }
 }
 
 # 控制台 + API（独立 origin）
@@ -167,7 +176,7 @@ server {
 }
 ```
 
-生产配置还将 `/vibehub/_sdk/` 和 `/vibehub/_hit` 回源到 Node。正式作品静态文件仍由 nginx 直接读取；**未审核预览是唯一例外**，必须回源 Node 校验短期 claim 与当前版本状态。BaaS 请求的项目路径线索通过请求头透传，但 header 由客户端控制，不能作为安全隔离依据。
+生产配置还将 `/vibehub/_sdk/` 和 `/vibehub/_hit` 回源到 Node。正式作品静态文件仍由 nginx 直接读取；**未审核预览是唯一例外**，只允许从逐 preview 子域回源 Node，主域预览路径固定返回 404。预览虚拟主机关闭 access log 与可能记录请求行的 error log；应用日志也只记录 path、不记录 query。BaaS 清空外部 `x-vibehub-project`，服务端从校验后的 `Referer` origin + path 解析项目。
 
 `try_files ... /index.html` 让学员写的前端路由（AI 很爱生成 SPA 路由）不会 404。
 
@@ -518,13 +527,14 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 
 | 威胁 | 缓解 |
 |---|---|
-| 作品 JS 窃取平台登录凭证 | 平台控制台迁到 `hub.supermind-ai.cn`，cookie 设为 **host-only**（不设 `Domain`）+ `SameSite=Lax`；主域作品拿不到 `hub` 的 cookie。这个措施只隔离控制台，不隔离作品之间的同源存储、IndexedDB 或权限 |
-| 作品伪造项目身份访问 BaaS | 正式/预览 URL 的路径负责映射项目；客户端 header 只是非可信线索，服务端不得把它当作授权。当前实现仍按 `x-vibehub-project` 优先、`Referer` 兜底解析，故 SDK 命名空间和 header 都不是安全边界 |
+| 作品 JS 窃取平台登录凭证 | 平台控制台迁到 `hub.supermind-ai.cn`，cookie 设为 **host-only**（不设 `Domain`）+ `SameSite=Lax`；作品拿不到 `hub` 的 cookie。正式作品之间仍共享 origin；未审核预览则逐 `preview_id` 隔离 origin |
+| 恶意预览跨路径读取另一个已授权预览 | 每个 `preview_id` 使用独立 origin 与 host-only cookie；Node 校验 host/path、拒绝其他 preview origin，并发送 `Cross-Origin-Resource-Policy: same-origin` |
+| 作品伪造项目身份访问 BaaS | 忽略客户端 project header；正式作品要求正式 origin + 路径，预览要求独立 origin 与 path 的 `preview_id` 一致。公开 BaaS 本身仍不把路由标识当秘密 |
 | 作品页把平台控制台嵌进 iframe 钓鱼 | 控制台响应加 `X-Frame-Options: DENY`；作品页 CSP 限定 `frame-ancestors` |
 | 压缩包路径穿越 / 炸弹 | §4.3 解包规则 |
 | BaaS 接口被刷 | 按项目配额 + 令牌桶限流 + 单条大小限制 |
 | 作品内容违规 | **发布前人工审核**（产品设计已强制）；AI 调用走网关的安全过滤；可选自动内容扫描 |
-| 未审核预览泄露或被搜索引擎收录 | 16 位 id 只负责定位；10 分钟 HMAC claim 绑定版本/项目/身份/签发 token，只用于换路径 HttpOnly cookie 并 303 清 URL；每次文件请求重查 token、课程成员和待审状态；匿名与越权返回 404，另加 `X-Robots-Tag: noindex` |
+| 未审核预览泄露或被搜索引擎收录 | 16 位 id 只负责定位；10 分钟 HMAC claim 绑定版本/项目/身份/签发 token，只用于在独立 preview origin 换 host-only 路径 HttpOnly cookie 并 303 清 URL；每次文件请求重查 token、课程成员和待审状态；匿名与越权返回 404，另加 `X-Robots-Tag: noindex` |
 | 平台被作品拖垮 | 正式作品由 nginx 直接 serve；仅低频的未审核预览经过 Node 做授权后读取静态文件 |
 | 邀请码泄露被冒用 | 码绑定后状态变更；限制 `max_devices`；老师可即时撤销并级联吊销 token |
 
@@ -541,7 +551,7 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 1 | **开 443 + 两个主机名的普通证书（HTTP-01）** | 阻塞项，录音等功能的前提；不需要泛解析、通配证书或 DNS-01 |
+| 1 | **开 443 + 正式/控制台普通证书 + 预览泛解析与通配证书** | 阻塞项；预览独立 origin 依赖 `*.preview.supermind-ai.cn`，通配证书通常需 DNS-01 |
 | 2 | 数据层 + 五维状态机 | 见 domain-model.md |
 | 3 | 提交/解包/版本落盘/预览 | §4 |
 | 4 | 审核队列 + 原子发布切换 | §4.2 ⑤ |
@@ -576,7 +586,8 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 |---|---|---|---|
 | 1 | 南京机归属哪个腾讯云账号 | 决定谁能开 443 | 控制台核对 |
 | 2 | `hub.supermind-ai.cn` A 记录是否已生效 | 决定控制台独立 origin 是否可用 | `dig` / HTTPS 实测 |
-| 3 | 备案主体名称与备案号 | 合规存档 | 腾讯云备案控制台 |
-| 4 | umami 是否支持按作品动态建 website | 决定浏览量方案 | 读 umami API 文档 + 实测 |
-| 5 | 模型网关的实际单次成本 | 诊断成本模型 | 接入后实测回填 |
-| 6 | 无头 Chromium 在 2 核机上的实际耗时与内存 | 决定诊断队列并发度 | 部署后压测 |
+| 3 | `*.preview.supermind-ai.cn` 泛解析与通配证书是否就绪 | 决定独立预览 origin 是否可上线 | `dig`、证书链与 HTTPS 实测 |
+| 4 | 备案主体名称与备案号 | 合规存档 | 腾讯云备案控制台 |
+| 5 | umami 是否支持按作品动态建 website | 决定浏览量方案 | 读 umami API 文档 + 实测 |
+| 6 | 模型网关的实际单次成本 | 诊断成本模型 | 接入后实测回填 |
+| 7 | 无头 Chromium 在 2 核机上的实际耗时与内存 | 决定诊断队列并发度 | 部署后压测 |

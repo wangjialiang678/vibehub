@@ -56,15 +56,14 @@ audience: both
 | 用途 | 地址 |
 |---|---|
 | 学员作品（正式版） | `supermind-ai.cn/vibehub/<username>/<projectname>/` ← 按 Michael 要求保留 |
-| 版本预览 | `supermind-ai.cn/vibehub/_preview/<pid16>/` |
+| 版本预览 | `<pid16>.preview.supermind-ai.cn/vibehub/_preview/<pid16>/` ← 每个待审版本独立 origin |
 | **平台控制台 + API** | **`hub.supermind-ai.cn`** ← 换 origin |
 
 平台 cookie 必须 **host-only**（不设 `Domain`），否则仍会下发到 `supermind-ai.cn`。
 
-### 修订 2：证书方案变简单了 ✅
+### 修订 2：正式作品用普通证书，预览必须使用通配证书
 
-路径式不需要通配证书，因此**不需要 DNS-01 验证、不需要 DNSPod API 凭证**。
-`supermind-ai.cn` + `hub.supermind-ai.cn` 两个普通证书，走 HTTP-01 即可（80 端口已通）。
+正式作品仍是路径式，`supermind-ai.cn` + `hub.supermind-ai.cn` 可以使用普通证书。安全复核确认：若所有未审核预览仍在主域下，只靠 path cookie 不能阻止恶意预览读取浏览器已授权的另一个预览。因此预览改为逐 `preview_id` 独立 origin，需要 `*.preview.supermind-ai.cn` 泛解析和通配证书；通配证书通常需要 DNS-01。DNS、证书和 Nginx 上线属于外部运维前置条件，不能仅凭仓库配置视为已经完成。
 
 **仍需开 443**——HTTPS 依然是功能前提（录音 `getUserMedia`、定位只在安全上下文可用）。这一条不因 URL 方案改变。
 
@@ -79,9 +78,9 @@ audience: both
 
 ### 修订 4：作品间的存储隔离
 
-所有作品共享 `supermind-ai.cn` 这一个 origin，`localStorage` / `sessionStorage` / cookie 会互相串。
+所有**正式作品**共享 `supermind-ai.cn` 这一个 origin，`localStorage` / `sessionStorage` / cookie 会互相串。未审核预览已改为逐 `preview_id` 独立 origin，不再共享预览 cookie 或浏览器存储。
 
-**处理**：平台注入的 SDK 提供 `vibehub.storage`，自动以 `vh:<project_id>:` 前缀命名空间；文档里明确告诉学员的 AI 用它而不是裸 `localStorage`。**这只能缓解不能根治**——同源下学员仍可绕过。若将来发现串扰造成实际问题，退路是切回子域名方案（数据层已按 slug 建模，切换成本主要在 nginx 与证书）。
+**处理**：平台注入的 SDK 提供 `vibehub.storage`，自动以 `vh:<project_id>:` 前缀命名空间；文档里明确告诉学员的 AI 用它而不是裸 `localStorage`。**这只能缓解正式作品间的串扰，不能根治**——同源下学员仍可绕过。正式作品若也需要强隔离，仍须另行决策并迁移到逐作品 origin。
 
 ## 待办：mermaid 图渲染失败
 

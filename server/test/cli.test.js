@@ -250,3 +250,41 @@ test('open 为待审版本换取短期预览地址后再打开', async () => {
     await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
   }
 });
+
+test('open 系统调用失败时错误消息也不回显完整 preview claim', async () => {
+  const server = createServer((req, res) => {
+    if (req.url === '/api/skill/project') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        project: { title: '测试作品', publish_status: 'unpublished' },
+        pending_version: { label: 'v0.2.0', preview_url: 'http://preview123456789.preview.test/vibehub/_preview/preview123456789/' },
+      }));
+    }
+    if (req.method === 'POST' && req.url === '/api/previews/preview123456789/grant') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ preview_url: 'http://preview123456789.preview.test/vibehub/_preview/preview123456789/?claim=failure-secret' }));
+    }
+    req.resume();
+    res.writeHead(404).end();
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-open-failure-home-');
+  const bin = tempDir('vh-cli-open-failure-bin-');
+  const openCommand = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  mkdirSync(join(home, '.vibehub'));
+  writeFileSync(join(home, '.vibehub', 'credentials.json'), JSON.stringify({ token: 'test-token', api }));
+  writeFileSync(join(bin, openCommand), '#!/bin/sh\nexit 42\n');
+  chmodSync(join(bin, openCommand), 0o755);
+
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'open'], {
+      cwd: resolve('..'),
+      env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, VIBEHUB_API: api },
+    });
+    assert.notEqual(result.code, 0);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /failure-secret|claim=|preview123456789\.preview\.test/);
+    assert.match(result.stderr, /浏览器没有成功打开安全预览/);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});

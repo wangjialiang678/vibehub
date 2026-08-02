@@ -5,7 +5,7 @@ import { mkdirSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve, join, normalize } from 'node:path';
 import { db, now } from './lib/db.js';
-import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR } from './lib/config.js';
+import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR, previewOrigin } from './lib/config.js';
 import { authRequired, assertProjectAccess, hasAllowedCookieOrigin } from './lib/auth.js';
 import skillRoutes from './routes/skill.js';
 import adminRoutes from './routes/admin.js';
@@ -16,7 +16,7 @@ import { DiagnosisQueue } from './services/diagnosis-queue.js';
 import { probePreviewHttp } from './services/preview-probe.js';
 import { cleanupTmp, diskHealth, pruneProjectArtifacts } from './services/storage.js';
 import { authorizePreviewRequest, createPreviewGrant, previewCookieName } from './services/preview-access.js';
-import { redactPreviewClaim } from './lib/preview-claims.js';
+import { requestUrlForLog } from './lib/preview-claims.js';
 
 const MIME = { '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.mjs': 'application/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -65,7 +65,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
       serializers: {
         req: (request) => ({
           method: request.method,
-          url: redactPreviewClaim(request.url),
+          url: requestUrlForLog(request.url),
           host: request.hostname,
           remoteAddress: request.ip,
         }),
@@ -195,7 +195,22 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     reply.header('cache-control', 'no-store');
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-content-type-options', 'nosniff');
+    reply.header('cross-origin-resource-policy', 'same-origin');
     reply.header('content-security-policy', `frame-ancestors 'self' ${CONSOLE_ORIGIN}`);
+    let expectedOrigin;
+    try { expectedOrigin = previewOrigin(req.params.pid); }
+    catch {
+      reply.code(404).type('text/html').send('<h1>404</h1>');
+      return 'denied';
+    }
+    const expectedHost = new URL(expectedOrigin).host.toLowerCase();
+    if (String(req.headers.host || '').toLowerCase() !== expectedHost ||
+        (req.headers.origin && req.headers.origin !== expectedOrigin)) {
+      reply.removeHeader('access-control-allow-origin');
+      reply.removeHeader('access-control-allow-credentials');
+      reply.code(404).type('text/html').send('<h1>404</h1>');
+      return 'denied';
+    }
     const cookieName = previewCookieName(req.params.pid);
     const hasQueryClaim = Object.prototype.hasOwnProperty.call(req.query || {}, 'claim');
     const queryClaim = hasQueryClaim ? req.query.claim : null;

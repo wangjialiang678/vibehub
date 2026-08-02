@@ -1,6 +1,6 @@
 import { nanoid, customAlphabet } from 'nanoid';
 import { db, now } from '../lib/db.js';
-import { authRequired, assertProjectAccess, isTeacher, revokeTokensForInvite } from '../lib/auth.js';
+import { authRequired, assertProjectAccess, isTeacher, revokeInviteAndTokens } from '../lib/auth.js';
 import { publishVersion, suspendSite } from '../services/publish.js';
 import { projectSnapshot, versionView, diagnosisView } from './_shared.js';
 import { pruneProjectArtifacts } from '../services/storage.js';
@@ -123,8 +123,7 @@ export default async function adminRoutes(app) {
   app.post('/api/invites/:code/revoke', { preHandler: teacherOnly }, async (req, reply) => {
     const inv = db.prepare('SELECT * FROM invites WHERE code=?').get(req.params.code);
     if (!inv || inv.camp_id !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个邀请码。');
-    db.prepare(`UPDATE invites SET status='revoked', revoked_at=? WHERE code=?`).run(now(), inv.code);
-    const revoked = revokeTokensForInvite(inv.code);   // 级联吊销该码签发的全部凭证
+    const revoked = revokeInviteAndTokens(inv.code);
     return { ok: true, revoked_tokens: revoked, message: `邀请码已撤销，${revoked} 台设备的连接已同时失效。` };
   });
 

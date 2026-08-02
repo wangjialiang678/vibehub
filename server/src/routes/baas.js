@@ -3,7 +3,7 @@ import { mkdirSync, createWriteStream, renameSync, rmSync, statSync } from 'node
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import { db, now } from '../lib/db.js';
-import { paths, LIMITS, WORKS_PREFIX, WORKS_ORIGIN } from '../lib/config.js';
+import { paths, LIMITS, WORKS_PREFIX, WORKS_ORIGIN, previewOrigin } from '../lib/config.js';
 import { projectDiskUsage } from '../services/storage.js';
 import { authRequired } from '../lib/auth.js';
 
@@ -35,16 +35,19 @@ function resolveProject(req) {
   let sourceUrl;
   try { sourceUrl = new URL(src); }
   catch { return null; }
-  // 路径像作品地址还不够：必须来自平台的作品 origin，而不是外站伪造同一路径。
-  if (sourceUrl.origin !== WORKS_ORIGIN) return null;
-
   // 预览路径必须先判——否则下面的正式路径正则会把 `_preview` 当成用户名匹配掉
   const pm = src.match(new RegExp(`${WORKS_PREFIX}/_preview/([a-z0-9]+)/`, 'i'));
   if (pm) {
+    // preview_id 同时绑定 path 与独立 origin；不能拿 A 预览 host 冒充 B 项目路径。
+    try { if (sourceUrl.origin !== previewOrigin(pm[1])) return null; }
+    catch { return null; }
     const row = db.prepare(`SELECT p.* FROM projects p JOIN versions v ON v.project_id=p.id
                             WHERE v.preview_id=?`).get(pm[1]);
     if (row) return row;
   }
+
+  // 路径像正式作品地址还不够：必须来自正式作品 origin，而不是外站伪造同一路径。
+  if (sourceUrl.origin !== WORKS_ORIGIN) return null;
 
   // 正式路径 /vibehub/<username>/<slug>/，用户名不允许以下划线开头（保留给平台）
   const m = src.match(new RegExp(`${WORKS_PREFIX}/([a-z0-9][a-z0-9_-]*)/([a-z0-9][a-z0-9_-]*)/`, 'i'));

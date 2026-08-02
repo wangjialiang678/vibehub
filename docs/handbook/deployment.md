@@ -11,7 +11,7 @@ audience: tech
 
 ## 1. 首次部署：DNS 与证书
 
-先为控制台添加 `hub.supermind-ai.cn` 的 A 记录。DNSPod 使用 `tccli`：
+先为控制台添加 `hub.supermind-ai.cn` 的 A 记录，并为隔离预览添加 `*.preview.supermind-ai.cn` 泛解析。DNSPod 使用 `tccli` 时，第二条记录的 `SubDomain` 为 `*.preview`：
 
 ```bash
 tccli dnspod CreateRecord \
@@ -20,15 +20,24 @@ tccli dnspod CreateRecord \
   --RecordType A \
   --RecordLine 默认 \
   --Value <server-public-ip>
+
+tccli dnspod CreateRecord \
+  --Domain supermind-ai.cn \
+  --SubDomain '*.preview' \
+  --RecordType A \
+  --RecordLine 默认 \
+  --Value <server-public-ip>
 ```
 
-确认解析已生效后，为控制台子域单独申请证书：
+确认解析已生效后，为控制台子域申请普通证书。预览通配证书通常不能使用 HTTP-01，必须按 DNS 提供商能力走 DNS-01；不要把 DNS API 密钥写进仓库或命令历史：
 
 ```bash
 sudo certbot certonly --nginx -d hub.supermind-ai.cn
+# 按已确认的 DNS-01 插件/流程签发；下行仅表达证书名与域名，不是可直接执行的完整命令。
+# certbot certonly <dns-01-options> -d '*.preview.supermind-ai.cn'
 ```
 
-该命令生成的证书路径与 `infra/nginx/vibehub-hub.conf` 一致：`/etc/letsencrypt/live/hub.supermind-ai.cn/`。
+普通证书路径与 `infra/nginx/vibehub-hub.conf` 一致：`/etc/letsencrypt/live/hub.supermind-ai.cn/`。预览配置模板默认引用 `/etc/letsencrypt/live/preview.supermind-ai.cn/`；实际签发的 certificate name 不同时，安装前必须修改 `infra/nginx/vibehub-preview-server.conf` 中两条证书路径。先用 `dig` 与证书链实测确认泛解析和通配证书，再继续部署。
 
 ## 2. 目录与运行用户
 
@@ -112,7 +121,8 @@ sudo rsync -a --delete /tmp/vibehub-console/ /var/www/vibehub-console/
 
 | 仓库文件 | 生产位置与作用 |
 |---|---|
-| `infra/nginx/vibehub-locations.conf` | `/etc/nginx/vibehub-locations.conf`；被官网 `supermind-ai` 的 443 server 引入。正式作品仍由 nginx 直出，未审核预览代理到 Node 校验。 |
+| `infra/nginx/vibehub-locations.conf` | `/etc/nginx/vibehub-locations.conf`；被官网 `supermind-ai` 的 443 server 引入。正式作品仍由 nginx 直出，主域上的未审核预览路径固定 404。 |
+| `infra/nginx/vibehub-preview-server.conf` | `/etc/nginx/sites-enabled/vibehub-preview`；`*.preview.supermind-ai.cn` 的独立 443 server，只有预览、SDK 与 BaaS 路由回源 Node。 |
 | `infra/nginx/vibehub-hub.conf` | `/etc/nginx/sites-enabled/vibehub-hub`；控制台独立的 `hub.supermind-ai.cn` server 块。 |
 
 从部署端同步并安装它们：
@@ -123,6 +133,7 @@ rsync -az infra/nginx/ <deploy-user>@<server>:/tmp/vibehub-nginx/
 
 ```bash
 sudo install -m 0644 /tmp/vibehub-nginx/vibehub-locations.conf /etc/nginx/vibehub-locations.conf
+sudo install -m 0644 /tmp/vibehub-nginx/vibehub-preview-server.conf /etc/nginx/sites-enabled/vibehub-preview
 sudo install -m 0644 /tmp/vibehub-nginx/vibehub-hub.conf /etc/nginx/sites-enabled/vibehub-hub
 ```
 
@@ -139,7 +150,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-> ⚠️ `location ~` 的路径正则中包含 `{}` 量词时，整个正则必须加双引号。`vibehub-locations.conf` 中的预览路径 `[a-z0-9]{16}` 已按此规则写成 `location ~ "..."`；去掉引号会让 nginx 解析失败。
+> ⚠️ `location ~` 的路径正则中包含 `{}` 量词时，整个正则必须加双引号。两个 VibeHub nginx 文件中的预览路径均已加引号；去掉会让 nginx 解析失败。预览虚拟主机刻意关闭 access log，并把 error log 设为 `/dev/null crit`，防止 claim query 因 upstream 错误落盘；预览可用性改由 `/healthz`、应用日志和外部探针监控。
 
 ## 6. 初始化数据与外部验收
 
@@ -157,6 +168,16 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 ```
 
 同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。
+
+最后用真实待审版本验证隔离预览：主域预览路径必须为 404；带 claim 的逐 preview 地址第一次只返回 303 且 Location 不含 claim，随后同一 host 的 cookie 请求返回 200。不要把完整 claim 写入终端日志或工单。
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  https://supermind-ai.cn/vibehub/_preview/<pid16>/
+curl -sS -I https://<pid16>.preview.supermind-ai.cn/vibehub/_preview/<pid16>/
+```
+
+第二条裸请求预期 404；作者或老师通过控制台/`vibehub open` 完成授权后的浏览器访问才应成功。
 
 ## 7. 回滚与备份
 

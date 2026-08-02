@@ -16,6 +16,12 @@ export function redactPreviewClaim(value) {
   return String(value || '').replace(/([?&]claim=)[^&\s]+/gi, '$1[redacted]');
 }
 
+/** 请求日志不需要 query；全部丢弃可同时覆盖编码参数名和未来新增的 URL 凭证。 */
+export function requestUrlForLog(value) {
+  try { return new URL(String(value || ''), 'http://vibehub.local').pathname; }
+  catch { return String(value || '').split('?', 1)[0]; }
+}
+
 export function issuePreviewClaim({ previewId, versionId, projectId, identity }, issuedAt = Date.now()) {
   const iat = Math.floor(issuedAt / 1000);
   const payload = {

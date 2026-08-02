@@ -11,6 +11,7 @@ Environment=VIBEHUB_PORT=4300
 Environment=VIBEHUB_HOST=127.0.0.1
 Environment=VIBEHUB_CONSOLE_ORIGIN=https://hub.supermind-ai.cn
 Environment=VIBEHUB_WORKS_ORIGIN=https://supermind-ai.cn
+Environment=VIBEHUB_PREVIEW_ORIGIN_TEMPLATE=https://{previewId}.preview.supermind-ai.cn
 EnvironmentFile=/etc/vibehub/vibehub.env
 ExecStart=/usr/bin/node src/index.js
 Restart=always

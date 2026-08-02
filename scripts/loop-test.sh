@@ -19,6 +19,7 @@ API="http://localhost:${PORT}"
 TMP="$(mktemp -d /tmp/vibehub-loop.XXXXXX)"
 export VIBEHUB_DATA_DIR="$TMP/data"
 export VIBEHUB_PORT="$PORT"
+export VIBEHUB_HOST="::"            # *.preview.localhost 同时兼容 IPv4/IPv6 loopback
 export VIBEHUB_API="$API"
 export HOME="$TMP/home"          # 隔离 CLI 凭证，不污染真实 ~/.vibehub
 mkdir -p "$HOME"
@@ -109,12 +110,13 @@ OWNER_PREVIEW="$(req -X POST -H "Authorization: Bearer $STOK" "$API/api/previews
 OWNER_CLAIM="$(python3 -c "import sys,urllib.parse;print(urllib.parse.parse_qs(urllib.parse.urlsplit(sys.argv[1]).query).get('claim',[''])[0])" "$OWNER_PREVIEW")"
 OWNER_EXCHANGE="$(req -D "$TMP/owner-preview.headers" -c "$TMP/owner-preview.cookies" -o "$TMP/owner-preview.body" -w '%{http_code}' "$OWNER_PREVIEW")"
 OWNER_LOCATION="$(awk '/^[Ll]ocation:/{sub(/^[^:]*:[[:space:]]*/,""); sub(/\r$/,""); print; exit}' "$TMP/owner-preview.headers")"
+OWNER_ORIGIN="$(python3 -c "import sys,urllib.parse;u=urllib.parse.urlsplit(sys.argv[1]);print(f'{u.scheme}://{u.netloc}')" "$OWNER_PREVIEW")"
 if [ "$OWNER_EXCHANGE" = "303" ] && [ -n "$OWNER_LOCATION" ] && ! echo "$OWNER_LOCATION" | grep -q 'claim=' && ! grep -q '聆听城市的声音' "$TMP/owner-preview.body"; then
   ok "owner claim 只换 cookie，并 303 到无 claim 地址"
 else
   bad "owner claim 交换不安全（HTTP ${OWNER_EXCHANGE}，Location=${OWNER_LOCATION}）"
 fi
-OWNER_HC="$(req -b "$TMP/owner-preview.cookies" -o /dev/null -w '%{http_code}' "$API$OWNER_LOCATION")"
+OWNER_HC="$(req -b "$TMP/owner-preview.cookies" -o /dev/null -w '%{http_code}' "$OWNER_ORIGIN$OWNER_LOCATION")"
 [ "$OWNER_HC" = "200" ] && ok "owner 可访问未审核预览" || bad "owner 预览返回 ${OWNER_HC}（应 200）"
 TEACHER_PREVIEW="$(req -X POST -H "Authorization: Bearer $TEACHER_TOKEN" "$API/api/previews/$PREV/grant" | jqp "d.get('preview_url','')")"
 TEACHER_HC="$(req -L -c "$TMP/teacher-preview.cookies" -o /dev/null -w '%{http_code}' "$TEACHER_PREVIEW")"
@@ -145,7 +147,12 @@ step "安全回归"
 # #6 .env 泄露：造一个带 .env 的包重新 deploy，.env 不得可访问
 printf 'API_KEY=sk-loop-secret\n' > "$WORK/.env"
 (cd "$WORK" && cli deploy --summary "带env" >/dev/null 2>&1)
-ENVHC="$(req -o /dev/null -w '%{http_code}' "$API/vibehub/_preview/$PREV/.env")"
+ENV_PREV="$(req -H "Authorization: Bearer $STOK" "$API/api/skill/project" | jqp "d['pending_version']['preview_url']")"
+ENV_PID="$(echo "$ENV_PREV" | grep -oE '_preview/[a-z0-9]+' | head -1 | cut -d/ -f2)"
+ENV_GRANT="$(req -X POST -H "Authorization: Bearer $STOK" "$API/api/previews/$ENV_PID/grant" | jqp "d.get('preview_url','')")"
+ENV_ORIGIN="$(python3 -c "import sys,urllib.parse;u=urllib.parse.urlsplit(sys.argv[1]);print(f'{u.scheme}://{u.netloc}')" "$ENV_GRANT")"
+req -L -c "$TMP/env-preview.cookies" -o /dev/null "$ENV_GRANT"
+ENVHC="$(req -b "$TMP/env-preview.cookies" -o /dev/null -w '%{http_code}' "$ENV_ORIGIN/vibehub/_preview/$ENV_PID/.env")"
 [ "$ENVHC" = "404" ] && ok "#6 .env 不落盘（404）" || bad "#6 .env 泄露！HTTP $ENVHC"
 rm -f "$WORK/.env"
 

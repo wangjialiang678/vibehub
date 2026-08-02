@@ -16,6 +16,16 @@ export const CONSOLE_ORIGIN = env.VIBEHUB_CONSOLE_ORIGIN || `http://localhost:51
 export const WORKS_ORIGIN = env.VIBEHUB_WORKS_ORIGIN || `http://localhost:${PORT}`;
 export const WORKS_PREFIX = env.VIBEHUB_WORKS_PREFIX || '/vibehub';
 
+// 每个未审核预览必须拥有独立 origin。只换 host-only cookie 但仍共用 origin 时，
+// 恶意作品可以跨路径 fetch 浏览器已授权的另一个预览并读取响应。
+export const PREVIEW_ORIGIN_TEMPLATE = env.VIBEHUB_PREVIEW_ORIGIN_TEMPLATE ||
+  (env.NODE_ENV === 'production'
+    ? 'https://{previewId}.preview.supermind-ai.cn'
+    : `http://{previewId}.preview.localhost:${PORT}`);
+if ((PREVIEW_ORIGIN_TEMPLATE.match(/\{previewId\}/g) || []).length !== 1) {
+  throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须且只能包含一个 {previewId}');
+}
+
 // 模型网关使用营地中台已经提供的 OpenAI 兼容接口。token 只从运行环境读取，
 // 未配置时诊断仍会以模板文案交付，不能因为模型故障卡住学员提交。
 export const MODEL_GATEWAY_URL = env.VIBEHUB_MODEL_GATEWAY_URL || `http://127.0.0.1:${env.HUB_PORT || 4100}`;
@@ -54,8 +64,17 @@ export const worksUrl = (username, slug) =>
 export const worksPath = (username, slug) =>
   `${WORKS_PREFIX}/${username}/${slug}/`;
 
+export const previewOrigin = (previewId) => {
+  if (!/^[a-z0-9]{16}$/.test(previewId)) throw new Error('previewId 格式不合法');
+  const url = new URL(PREVIEW_ORIGIN_TEMPLATE.replace('{previewId}', previewId));
+  if (url.pathname !== '/' || url.search || url.hash || !['http:', 'https:'].includes(url.protocol)) {
+    throw new Error('VIBEHUB_PREVIEW_ORIGIN_TEMPLATE 必须是 HTTP(S) origin，不能包含路径、query 或 fragment');
+  }
+  return url.origin;
+};
+
 export const previewUrl = (previewId) =>
-  `${WORKS_ORIGIN}${WORKS_PREFIX}/_preview/${previewId}/`;
+  `${previewOrigin(previewId)}${WORKS_PREFIX}/_preview/${previewId}/`;
 
 export const previewPath = (previewId) =>
   `${WORKS_PREFIX}/_preview/${previewId}/`;

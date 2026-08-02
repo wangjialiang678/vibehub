@@ -255,7 +255,11 @@ const cmds = {
     const openingPreview = !!s.pending_version?.preview_url;
     const url = openingPreview ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
     if (!url) die('还没有可打开的版本。', '先运行 vibehub deploy');
-    execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+    try {
+      execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+    } catch {
+      die(openingPreview ? '浏览器没有成功打开安全预览。' : '浏览器没有成功打开正式作品。', '请检查系统默认浏览器后重试');
+    }
     say(openingPreview ? '已在浏览器打开安全预览' : `已打开 ${url}`);
   },
 

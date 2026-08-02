@@ -28,9 +28,20 @@ export function resolveToken(raw) {
   return row;
 }
 
-export function revokeTokensForInvite(code) {
-  return db.prepare('UPDATE tokens SET revoked_at = ? WHERE invite_code = ? AND revoked_at IS NULL')
-    .run(now(), code).changes;
+/** 邀请码状态与其全部 token 必须原子失效，不能留下半撤销窗口。 */
+export function revokeInviteAndTokens(code) {
+  const revokedAt = now();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE invites SET status='revoked', revoked_at=? WHERE code=?`).run(revokedAt, code);
+    const revoked = db.prepare('UPDATE tokens SET revoked_at = ? WHERE invite_code = ? AND revoked_at IS NULL')
+      .run(revokedAt, code).changes;
+    db.exec('COMMIT');
+    return revoked;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* BEGIN 失败时没有可回滚事务 */ }
+    throw error;
+  }
 }
 
 export function countDevices(code) {

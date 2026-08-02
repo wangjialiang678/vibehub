@@ -144,7 +144,7 @@ CREATE INDEX idx_versions_project ON versions(project_id, seq DESC);
 
 **版本是不可变的。** 一旦落盘就不再修改——审核、部署、诊断的结果都挂在关联表上，而不是回写版本本身。这保证「访客看到的是哪个版本」永远可追溯。
 
-`preview_id` 只是预览资源的稳定定位符，**不是访问凭证**。访问未审核版本前，项目 owner 或同课程老师/管理员必须用自己的 web session 或 skill token 换取 10 分钟 HMAC claim。claim 同时绑定 `preview_id`、`version_id`、`project_id`、授权身份与签发 token id；首次请求只把 claim 换成路径专用 HttpOnly cookie，并以 `303` 清除 URL 中的 claim，不返回作品正文。此后的每次文件请求仍重查签发 token、课程成员身份、当前 `projects.pending_version_id` 和最新 review 状态。
+`preview_id` 只是预览资源的稳定定位符，**不是访问凭证**。它同时出现在独立 origin `<preview_id>.preview.supermind-ai.cn` 与路径 `/vibehub/_preview/<preview_id>/` 中，两处必须一致。访问未审核版本前，项目 owner 或同课程老师/管理员必须用自己的 web session 或 skill token 换取 10 分钟 HMAC claim。claim 同时绑定 `preview_id`、`version_id`、`project_id`、授权身份与签发 token id；首次请求只把 claim 换成该 preview origin 的 host-only、路径专用 HttpOnly cookie，并以 `303` 清除 URL 中的 claim，不返回作品正文。此后的每次文件请求仍重查 host/path、请求 origin、签发 token、课程成员身份、当前 `projects.pending_version_id` 和最新 review 状态。
 
 ### 1.6 deployments — 部署记录
 
@@ -324,7 +324,7 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 - ✅ 已发布项目的 `live_version_id` 内容、标题、简介、昵称、浏览量
 - ❌ 邀请码、未发布版本、AI 诊断报告、审核记录、真实姓名、任何内部管理数据
 
-未发布版本不属于公开可见性范围：裸 `/vibehub/_preview/<pid>/` 请求返回 404。owner 与同课程老师/管理员只能用短期 claim 换取路径 cookie 后查看；跨项目、跨课程、签发 token 已撤销/过期或成员已移除时同样返回 404，避免泄露预览是否存在。
+未发布版本不属于公开可见性范围：主域或独立预览 origin 上的裸 `/vibehub/_preview/<pid>/` 请求都返回 404。owner 与同课程老师/管理员只能用短期 claim 在对应的逐 preview origin 换取 host-only 路径 cookie 后查看；跨 origin、host/path 不一致、跨项目、跨课程、签发 token 已撤销/过期或成员已移除时同样返回 404，避免泄露预览是否存在。
 
 ---
 

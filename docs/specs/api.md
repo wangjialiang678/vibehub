@@ -23,8 +23,8 @@ audience: tech
 |---|---|---|
 | 网页用户（学员/老师） | 会话 cookie（**host-only、SameSite=Lax、HttpOnly、Secure**） | 浏览器 |
 | AI 工具（skill） | `Authorization: Bearer <token>` | `~/.vibehub/credentials.json` |
-| 未审核预览 | 10 分钟 HMAC claim（绑定 preview、version、project、用户、课程与签发 token） | grant 返回的单次引导 URL → 预览路径专用 HttpOnly cookie |
-| 学员作品运行时 | 由作品 URL 路径映射 project；作品不持有密钥 | SDK 发送路径线索，服务端负责校验 |
+| 未审核预览 | 10 分钟 HMAC claim（绑定 preview、version、project、用户、课程与签发 token） | grant 返回的单次引导 URL → 该 preview 独立 origin 的 host-only HttpOnly cookie |
+| 学员作品运行时 | 正式作品由 origin + 路径、预览由独立 preview origin + path 映射 project；作品不持有密钥 | 浏览器 `Referer` 提供公开路由线索，服务端负责校验 |
 
 **铁律**：服务端一切鉴权只认凭证内嵌的 `scope{camp_id, project_id, role}`，**绝不接受客户端自报的 camp_id / project_id 参数**。请求里出现的 camp/project 参数只用于校验「是否与 scope 一致」，不一致即 403。
 
@@ -35,14 +35,14 @@ audience: tech
 ```jsonc
 // ← 200
 {
-  "preview_url": "https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
+  "preview_url": "https://a1b2c3d4e5f6g7h8.preview.supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
   "expires_at": "2026-08-03T01:20:00.000Z"
 }
 ```
 
-claim 有效期固定为 10 分钟，绑定 `preview_id + version_id + project_id + user_id + camp_id + role + issuer_token_id`。任何携带 query claim 的请求都**只做交换**：Node 校验后设置该预览路径专用、host-only、HttpOnly cookie，再以 `303` 跳转到删除 `claim`、保留其他 query 的同路径；该响应绝不返回或执行作品内容。CSS、JS、图片等后续请求只带 cookie，不再复制 claim 到资源 URL。
+claim 有效期固定为 10 分钟，绑定 `preview_id + version_id + project_id + user_id + camp_id + role + issuer_token_id`。每个 `preview_id` 使用不同 origin；任何携带 query claim 的请求都**只做交换**：Node 校验后设置该 preview origin 下、预览路径专用的 host-only、HttpOnly cookie，再以 `303` 跳转到删除 `claim`、保留其他 query 的同路径；该响应绝不返回或执行作品内容。CSS、JS、图片等后续请求只带 cookie，不再复制 claim 到资源 URL。
 
-Node 在每次预览文件请求时重新检查签发 token 仍未撤销/过期、用户仍是课程成员且角色未变，以及版本仍是该项目当前待审版本。邀请码撤销、成员移除、角色变化、`superseded`、`rejected`、诊断 blocker 清退或正式发布都会让已经换取的 cookie 立即返回 404。响应一律 `Cache-Control: no-store`、`Referrer-Policy: no-referrer`；Node 请求日志与诊断证据会脱敏 claim，nginx 关闭预览路径 access log，避免短期凭证落盘。
+Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、拒绝其他预览 origin 发起的请求，并重新检查签发 token 仍未撤销/过期、用户仍是课程成员且角色未变，以及版本仍是该项目当前待审版本。邀请码撤销、成员移除、角色变化、`superseded`、`rejected`、诊断 blocker 清退或正式发布都会让已经换取的 cookie 立即返回 404。响应一律包含 `Cache-Control: no-store`、`Referrer-Policy: no-referrer` 和 `Cross-Origin-Resource-Policy: same-origin`。应用请求日志只保留 path、丢弃全部 query；预览 Nginx 虚拟主机关闭 access log，并把 error log 置为 `/dev/null crit`，避免编码参数名或 upstream 错误把 claim 请求行落盘。
 
 ---
 
@@ -105,7 +105,7 @@ Node 在每次预览文件请求时重新检查签发 token 仍未撤销/过期�
 // meta
 { "label":"v1.2.0", "summary":"新增声音上传与地图筛选", "flows":["上传声音","查看地图"] }
 // ←  201
-{ "version_id":"v_..", "seq":7, "preview_url":"https://supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
+{ "version_id":"v_..", "seq":7, "preview_url":"https://a1b2c3d4e5f6g7h8.preview.supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
   "preview_expires_at":"2026-08-03T01:20:00.000Z",
   "deployment":{"status":"ready"}, "diagnosis":{"status":"running"},
   "review":{"status":"waiting_for_diagnosis"},
@@ -203,11 +203,11 @@ Node 在每次预览文件请求时重新检查签发 token 仍未撤销/过期�
 
 ## 5. BaaS 端（学员作品运行时调用）〔决策 1〕
 
-基址：主域作品路径下的 `/baas/v1/*`，由 nginx 反代到平台。正式作品使用
+基址：作品 origin 下的 `/baas/v1/*`，由 nginx 反代到平台。正式作品使用
 `https://supermind-ai.cn/vibehub/<username>/<projectname>/`，预览使用
-`https://supermind-ai.cn/vibehub/_preview/<pid16>/`。项目身份来自 URL 路径映射，不由 Host 推导；作品不需要也拿不到任何密钥。
+`https://<pid16>.preview.supermind-ai.cn/vibehub/_preview/<pid16>/`。正式作品的项目身份由固定正式 origin + URL 路径映射；预览身份必须由独立 preview origin 与 path 中相同的 `pid16` 共同映射。作品不需要也拿不到任何密钥。
 
-SDK 当前发送 `x-vibehub-project` 路径线索，服务端当前按该 header 优先、`Referer` 兜底解析。两者都是客户端可控请求头，**不是授权凭证或安全边界**；服务端不得信任客户端自报的 project header/id。
+服务端忽略客户端自报的 `x-vibehub-project`，只从浏览器 `Referer` 的受认可 origin + path 解析公开项目路由。`Referer` 仍不是秘密或用户鉴权凭证：正式作品的公开 BaaS 操作仍可被访客主动调用；预览的 origin/path 双绑定只防止 A 预览把自己的来源冒充成 B 项目。
 
 ### 当前已实现
 
@@ -253,5 +253,6 @@ SDK 当前发送 `x-vibehub-project` 路径线索，服务端当前按该 header
 | 老师同时点两次「审核并发布」 | `reviews` 表带乐观锁（`status='pending'` 作为 WHERE 条件），第二次影响 0 行 → 返回「这个版本已经处理过了」 |
 | 学员在审核过程中又提交新版本 | 新版本入队，旧的 pending review 自动置为 `superseded`，老师队列只显示最新的 |
 | 未审核预览 claim 已签发后凭证或版本状态变化 | 每次文件请求都重新检查签发 token、课程成员身份、`pending_version_id` 与 review 状态，旧 cookie 立即返回 404 |
+| 老师撤销邀请码时 token 级联更新失败或并发重复撤销 | 邀请码状态与该码签发的全部 token 在同一 SQLite 写事务中更新；失败整体回滚，重复请求保持幂等 |
 | 发布切换过程中有访客访问 | `ln -sfn` + `mv -T` 原子替换，访客要么看到旧版要么看到新版，不会 404 |
 | 诊断任务重复入队 | 按 `version_id` 去重，同一版本同时只有一个诊断任务在跑 |
