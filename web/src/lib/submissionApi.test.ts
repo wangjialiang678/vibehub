@@ -7,6 +7,7 @@ class FakeXMLHttpRequest {
   async = true;
   withCredentials = false;
   status = 0;
+  timeout = 0;
   responseText = '';
   sentBody: Document | XMLHttpRequestBodyInit | null = null;
   readonly requestHeaders = new Map<string, string>();
@@ -14,6 +15,7 @@ class FakeXMLHttpRequest {
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onabort: (() => void) | null = null;
+  ontimeout: (() => void) | null = null;
 
   open(method: string, url: string, async = true) {
     this.method = method;
@@ -29,8 +31,8 @@ class FakeXMLHttpRequest {
     this.sentBody = body;
   }
 
-  progress(loaded: number, total: number) {
-    this.upload.onprogress?.({ lengthComputable: true, loaded, total } as ProgressEvent);
+  progress(loaded: number, total: number, lengthComputable = true) {
+    this.upload.onprogress?.({ lengthComputable, loaded, total } as ProgressEvent);
   }
 
   complete(status: number, body: unknown) {
@@ -73,6 +75,7 @@ describe('submitProjectVersion', () => {
     expect(xhr.method).toBe('POST');
     expect(xhr.url).toBe('/api/projects/project%20%2F%201/versions');
     expect(xhr.withCredentials).toBe(true);
+    expect(xhr.timeout).toBe(120_000);
     expect(xhr.sentBody).toBeInstanceOf(FormData);
     const form = xhr.sentBody as FormData;
     expect(form.get('bundle')).toBe(file);
@@ -103,5 +106,43 @@ describe('submitProjectVersion', () => {
 
     await expect(pending).rejects.toMatchObject({ status: 0 });
     await expect(pending).rejects.toThrow('网络');
+  });
+
+  it.each([
+    ['timeout', '超过 120 秒'],
+    ['abort', '取消'],
+  ])('handles an upload %s with a readable error', async (event, message) => {
+    const submit = createSubmitProjectVersion(() => xhr as unknown as XMLHttpRequest);
+    const pending = submit('p1', new File(['game'], 'game.zip'), {}, () => undefined);
+
+    if (event === 'timeout') xhr.ontimeout?.();
+    else xhr.onabort?.();
+
+    await expect(pending).rejects.toMatchObject({ status: 0 });
+    await expect(pending).rejects.toThrow(message);
+  });
+
+  it('ignores uncomputable progress and duplicate terminal events', async () => {
+    const progress: number[] = [];
+    const submit = createSubmitProjectVersion(() => xhr as unknown as XMLHttpRequest);
+    const pending = submit('p1', new File(['game'], 'game.zip'), {}, (value) => progress.push(value));
+
+    xhr.progress(5, 0, false);
+    xhr.complete(201, response);
+    xhr.onerror?.();
+    xhr.complete(201, response);
+
+    await expect(pending).resolves.toEqual(response);
+    expect(progress).toEqual([0, 100]);
+  });
+
+  it('rejects a successful status whose response is incomplete', async () => {
+    const submit = createSubmitProjectVersion(() => xhr as unknown as XMLHttpRequest);
+    const pending = submit('p1', new File(['game'], 'game.zip'), {}, () => undefined);
+
+    xhr.complete(204, '');
+
+    await expect(pending).rejects.toMatchObject({ status: 204 });
+    await expect(pending).rejects.toThrow('响应不完整');
   });
 });

@@ -33,6 +33,7 @@ async function requestBlob(path: string): Promise<Blob> {
 }
 
 type XhrFactory = () => XMLHttpRequest;
+const SUBMISSION_TIMEOUT_MS = 120_000;
 
 function submissionErrorMessage(xhr: XMLHttpRequest) {
   try {
@@ -40,6 +41,22 @@ function submissionErrorMessage(xhr: XMLHttpRequest) {
     if (typeof data.error?.message === 'string' && data.error.message) return data.error.message;
   } catch { /* 使用下面的通用提示 */ }
   return '提交没有完成，请稍后再试。';
+}
+
+function isSubmissionResponse(value: unknown): value is SubmissionResponse {
+  if (!value || typeof value !== 'object') return false;
+  const data = value as Partial<SubmissionResponse>;
+  return typeof data.version_id === 'string'
+    && typeof data.seq === 'number'
+    && typeof data.label === 'string'
+    && typeof data.preview_url === 'string'
+    && typeof data.preview_expires_at === 'string'
+    && typeof data.rewrites === 'number'
+    && typeof data.deployment?.status === 'string'
+    && typeof data.diagnosis?.id === 'string'
+    && typeof data.diagnosis?.status === 'string'
+    && typeof data.review?.status === 'string'
+    && typeof data.message === 'string';
 }
 
 export function createSubmitProjectVersion(xhrFactory: XhrFactory) {
@@ -51,31 +68,51 @@ export function createSubmitProjectVersion(xhrFactory: XhrFactory) {
   ): Promise<SubmissionResponse> => new Promise((resolve, reject) => {
     const xhr = xhrFactory();
     const form = new FormData();
+    let settled = false;
     form.append('bundle', file);
     form.append('meta', JSON.stringify(meta));
 
     xhr.open('POST', `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/versions`);
     xhr.withCredentials = true;
-    onProgress(0);
+    xhr.timeout = SUBMISSION_TIMEOUT_MS;
+    const reportProgress = (progress: number) => {
+      if (settled) return;
+      try { onProgress(progress); } catch { /* 展示进度失败不能中断上传 */ }
+    };
+    const settleError = (error: ApiError) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    reportProgress(0);
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable || event.total <= 0) return;
-      onProgress(Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100))));
+      reportProgress(Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100))));
     };
     xhr.onload = () => {
+      if (settled) return;
       if (xhr.status >= 200 && xhr.status < 300) {
+        let data: unknown;
         try {
-          resolve(JSON.parse(xhr.responseText) as SubmissionResponse);
-          onProgress(100);
+          data = JSON.parse(xhr.responseText);
         } catch {
-          reject(new ApiError(xhr.status, '服务器返回的数据无法读取，请刷新页面后再试。'));
+          settleError(new ApiError(xhr.status, '服务器响应不完整，请刷新页面后再试。'));
+          return;
         }
+        if (!isSubmissionResponse(data)) {
+          settleError(new ApiError(xhr.status, '服务器响应不完整，请刷新页面后再试。'));
+          return;
+        }
+        reportProgress(100);
+        settled = true;
+        resolve(data);
         return;
       }
-      reject(new ApiError(xhr.status, submissionErrorMessage(xhr)));
+      settleError(new ApiError(xhr.status, submissionErrorMessage(xhr)));
     };
-    const rejectNetworkError = () => reject(new ApiError(0, '网络连接中断了，请检查网络后重新提交。'));
-    xhr.onerror = rejectNetworkError;
-    xhr.onabort = rejectNetworkError;
+    xhr.onerror = () => settleError(new ApiError(0, '网络连接中断了，请检查网络后重新提交。'));
+    xhr.onabort = () => settleError(new ApiError(0, '上传已取消，请重新选择文件后提交。'));
+    xhr.ontimeout = () => settleError(new ApiError(0, '上传等待超过 120 秒，请检查网络后重新提交。'));
     xhr.send(form);
   });
 }

@@ -1,6 +1,6 @@
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { prepareSubmissionFiles } from './submissionFiles';
+import { createPrepareSubmissionFiles, prepareSubmissionFiles } from './submissionFiles';
 
 const MB = 1024 * 1024;
 
@@ -13,6 +13,30 @@ function browserFile(
   const file = new File(Array.isArray(content) ? content : [content], name, { type });
   Object.defineProperty(file, 'webkitRelativePath', { value: webkitRelativePath });
   return file;
+}
+
+class FakeZipWorker {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: ErrorEvent) => void) | null = null;
+  terminated = false;
+  readonly entries: Record<string, Uint8Array> = {};
+
+  postMessage(message: { type: string; path?: string; data?: ArrayBuffer }, transfer?: Transferable[]) {
+    if (message.type === 'add' && message.path && message.data) {
+      expect(transfer).toEqual([message.data]);
+      this.entries[message.path] = new Uint8Array(message.data);
+      queueMicrotask(() => this.onmessage?.(new MessageEvent('message', { data: { type: 'added' } })));
+      return;
+    }
+    const archive = zipSync(this.entries, { level: 0 });
+    queueMicrotask(() => this.onmessage?.(new MessageEvent('message', {
+      data: { type: 'done', archive: archive.buffer },
+    })));
+  }
+
+  terminate() {
+    this.terminated = true;
+  }
 }
 
 describe('prepareSubmissionFiles', () => {
@@ -33,12 +57,38 @@ describe('prepareSubmissionFiles', () => {
       browserFile('app.js', 'console.log("hello")', 'my-game/assets/app.js', 'text/javascript'),
     ];
 
-    const archive = await prepareSubmissionFiles(files);
+    const worker = new FakeZipWorker();
+    const prepare = createPrepareSubmissionFiles(() => worker);
+    const archive = await prepare(files);
     const entries = unzipSync(new Uint8Array(await archive.arrayBuffer()));
 
     expect(archive.name).toBe('my-game.zip');
     expect(new TextDecoder().decode(entries['my-game/index.html'])).toBe('<main>hello</main>');
     expect(new TextDecoder().decode(entries['my-game/assets/app.js'])).toBe('console.log("hello")');
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('rejects folders with more than 5000 files before starting a worker', async () => {
+    const files = Array.from({ length: 5001 }, (_, index) =>
+      browserFile(`${index}.txt`, '', `game/${index}.txt`));
+    let workerCreated = false;
+    const prepare = createPrepareSubmissionFiles(() => {
+      workerCreated = true;
+      return new FakeZipWorker();
+    });
+
+    await expect(prepare(files)).rejects.toThrow('5000');
+    expect(workerCreated).toBe(false);
+  });
+
+  it('terminates the worker and reports a readable compression error', async () => {
+    const worker = new FakeZipWorker();
+    worker.postMessage = () => queueMicrotask(() => worker.onerror?.({} as ErrorEvent));
+    const prepare = createPrepareSubmissionFiles(() => worker);
+
+    await expect(prepare([browserFile('index.html', 'hello', 'game/index.html')]))
+      .rejects.toThrow('压缩失败');
+    expect(worker.terminated).toBe(true);
   });
 
   it('rejects an empty selection', async () => {
