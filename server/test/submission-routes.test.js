@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { strToU8, zipSync } from 'fflate';
 
 const dataDir = mkdtempSync(join(tmpdir(), 'vh-submission-routes-'));
@@ -12,7 +13,7 @@ process.env.VIBEHUB_PREVIEW_CLAIM_SECRET = 'submission-route-preview-secret-32-b
 
 const { buildApp } = await import('../src/index.js');
 const { db, now } = await import('../src/lib/db.js');
-const { issueToken } = await import('../src/lib/auth.js');
+const { issueToken, resolveToken } = await import('../src/lib/auth.js');
 const { CONSOLE_ORIGIN, LIMITS, paths } = await import('../src/lib/config.js');
 
 const app = await buildApp({
@@ -113,6 +114,17 @@ function submit(projectId, headers, form) {
     headers: { ...headers, 'content-type': `multipart/form-data; boundary=${form.boundary}` },
     payload: form.payload,
   });
+}
+
+function captureReply() {
+  return {
+    statusCode: 200,
+    body: null,
+    headers: {},
+    header(name, value) { this.headers[name] = value; return this; },
+    code(statusCode) { this.statusCode = statusCode; return this; },
+    send(body) { this.body = body; return body; },
+  };
 }
 
 beforeEach(clearState);
@@ -242,6 +254,49 @@ test('超出上传上限的 bundle 返回 413 并清理截断文件', async () =
   assert.equal(response.statusCode, 413);
   assert.equal(response.json().error.code, 'bundle_too_large');
   assert.deepEqual(readdirSync(paths.tmp), []);
+});
+
+test('bundle 流中断会清理部分临时文件、释放锁且不消耗限频次数', async () => {
+  const student = fixture();
+  const { handleBrowserSubmissionRequest } = await import('../src/routes/submissions.js');
+  const { browserSubmissionGuard } = await import('../src/services/submission-guard.js');
+  const brokenFile = Readable.from((async function* () {
+    yield Buffer.from('<main>partial');
+    throw new Error('connection interrupted');
+  })());
+  brokenFile.truncated = false;
+  const req = {
+    method: 'POST',
+    headers: { origin: CONSOLE_ORIGIN },
+    params: { id: student.projectId },
+    auth: resolveToken(student.token),
+    authSource: 'cookie',
+    log: { info() {} },
+    parts: async function* () {
+      yield { type: 'file', fieldname: 'bundle', filename: 'partial.html', file: brokenFile };
+    },
+  };
+  const reply = captureReply();
+
+  await handleBrowserSubmissionRequest(req, reply, {
+    diagnosisQueue: null,
+    multipartErrors: app.multipartErrors,
+  });
+
+  assert.equal(reply.statusCode, 400);
+  assert.equal(reply.body.error.code, 'multipart_invalid');
+  assert.deepEqual(readdirSync(paths.tmp), []);
+
+  const afterInterruption = browserSubmissionGuard.acquire(student.projectId);
+  assert.equal(afterInterruption.ok, true);
+  afterInterruption.release();
+  for (let i = 0; i < 5; i += 1) {
+    const permit = browserSubmissionGuard.acquire(student.projectId);
+    assert.equal(permit.ok, true, `中断不计次时第 ${i + 1} 次合法提交应被允许`);
+    permit.recordAttempt();
+    permit.release();
+  }
+  assert.equal(browserSubmissionGuard.acquire(student.projectId).status, 429);
 });
 
 test('非法 meta JSON 和 schema 返回 invalid_meta，解析垃圾不消耗提交次数', async () => {
