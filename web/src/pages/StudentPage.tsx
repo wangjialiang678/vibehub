@@ -42,7 +42,11 @@ export function StudentSubmissionHeadingActions({ pending, live, rejected, campS
 
 type StudentPreviewDependencies = {
   grantPreview: typeof api.previewGrant;
-  openWindow: (url: string, target: string, features: string) => unknown;
+  openWindow: (url: string, target: string) => {
+    opener: unknown;
+    location: { replace: (url: string) => void };
+    close: () => void;
+  } | null;
   setNotice: (notice: string) => void;
 };
 
@@ -51,12 +55,19 @@ function previewId(url: string) {
 }
 
 export async function openStudentPreview(url: string, dependencies: StudentPreviewDependencies) {
+  const child = dependencies.openWindow('about:blank', '_blank');
+  if (!child) {
+    dependencies.setNotice('浏览器拦截了预览窗口，请允许弹窗后重试。');
+    return;
+  }
   try {
+    child.opener = null;
     const pid = previewId(url);
     const destination = pid ? (await dependencies.grantPreview(pid)).preview_url : url;
-    dependencies.openWindow(destination, '_blank', 'noopener,noreferrer');
-  } catch (error) {
-    dependencies.setNotice(readableError(error, '这个预览暂时打不开。'));
+    child.location.replace(destination);
+  } catch {
+    child.close();
+    dependencies.setNotice('这个预览暂时打不开。');
   }
 }
 
@@ -70,7 +81,7 @@ export function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnap
     if (!previewUrl) return;
     void openStudentPreview(previewUrl, {
       grantPreview: api.previewGrant,
-      openWindow: (url, target, features) => window.open(url, target, features),
+      openWindow: (url, target) => window.open(url, target),
       setNotice,
     });
   };

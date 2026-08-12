@@ -64,28 +64,46 @@ describe('学员提交入口', () => {
     expect(html).not.toContain('已退回修改');
   });
 
-  it('打开待审预览时先获取短期授权，再把授权地址交给新窗口', async () => {
+  it('点击时同步预留安全窗口，授权成功后在该窗口替换地址', async () => {
     const grantPreview = vi.fn(async () => ({ preview_url: 'https://works.example/vibehub/_preview/preview2/?claim=short-lived-secret', expires_at: '2026-08-13T09:00:00Z' }));
-    const openWindow = vi.fn();
+    const child = { opener: {} as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+    const openWindow = vi.fn(() => child);
     const setNotice = vi.fn();
 
     await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice });
 
+    expect(openWindow).toHaveBeenCalledWith('about:blank', '_blank');
+    expect(openWindow.mock.invocationCallOrder[0]).toBeLessThan(grantPreview.mock.invocationCallOrder[0]);
+    expect(child.opener).toBeNull();
     expect(grantPreview).toHaveBeenCalledWith('preview2');
-    expect(openWindow).toHaveBeenCalledWith('https://works.example/vibehub/_preview/preview2/?claim=short-lived-secret', '_blank', 'noopener,noreferrer');
+    expect(child.location.replace).toHaveBeenCalledWith('https://works.example/vibehub/_preview/preview2/?claim=short-lived-secret');
+    expect(child.close).not.toHaveBeenCalled();
     expect(setNotice).not.toHaveBeenCalled();
   });
 
-  it('预览授权失败时不打开窗口，且提示中不泄露 claim', async () => {
-    const grantPreview = vi.fn(async () => { throw new ApiError(503, '这个预览暂时打不开。'); });
-    const openWindow = vi.fn();
+  it('弹窗被浏览器拦截时立即提示，不再请求预览授权', async () => {
+    const grantPreview = vi.fn(async () => ({ preview_url: 'unused', expires_at: 'unused' }));
+    const openWindow = vi.fn(() => null);
     const setNotice = vi.fn();
 
     await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice });
 
-    expect(openWindow).not.toHaveBeenCalled();
+    expect(grantPreview).not.toHaveBeenCalled();
+    expect(setNotice).toHaveBeenCalledWith('浏览器拦截了预览窗口，请允许弹窗后重试。');
+  });
+
+  it('预览授权失败时关闭预留窗口，且提示不泄露 claim', async () => {
+    const grantPreview = vi.fn(async () => { throw new ApiError(503, '授权失败 https://works.example/?claim=server-secret'); });
+    const child = { opener: {} as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+    const openWindow = vi.fn(() => child);
+    const setNotice = vi.fn();
+
+    await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice });
+
+    expect(child.close).toHaveBeenCalledOnce();
+    expect(child.location.replace).not.toHaveBeenCalled();
     expect(setNotice).toHaveBeenCalledWith('这个预览暂时打不开。');
-    expect(setNotice.mock.calls.flat().join('')).not.toContain('claim=');
+    expect(setNotice.mock.calls.flat().join('')).not.toMatch(/server-secret|claim=/);
   });
 
   it('在项目标题区渲染提交入口和待审替代说明', () => {
