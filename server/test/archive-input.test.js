@@ -114,6 +114,68 @@ test('ZIP sensitive executable entries are filtered and recorded before executab
   assert.ok(result.rejected.some((item) => item.path === '.git/hooks/pre-commit'));
 });
 
+test('ZIP filtered entries still consume the file-count budget', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const { LIMITS } = await import('../src/lib/config.js');
+  const originalLimit = LIMITS.fileCount;
+  const source = zipFile({
+    'index.html': strToU8('safe'),
+    'node_modules/a.js': strToU8('a'),
+    'node_modules/b.js': strToU8('b'),
+  });
+
+  LIMITS.fileCount = 2;
+  try {
+    await assert.rejects(
+      normalizeUpload({ source, filename: 'too-many-filtered.zip', staging: tmp() }),
+      (error) => error.code === 'too_many_files',
+    );
+  } finally {
+    LIMITS.fileCount = originalLimit;
+  }
+});
+
+test('ZIP filtered entries still consume unpacked-size and compression-ratio budgets', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const { LIMITS } = await import('../src/lib/config.js');
+  const originalLimit = LIMITS.unpackedBytes;
+  const sizeSource = zipFile({
+    'node_modules/a.dat': strToU8('123456'),
+    'node_modules/b.dat': strToU8('abcdef'),
+  });
+  const ratioSource = zipFile({
+    'node_modules/highly-compressible.dat': new Uint8Array(1024 * 1024),
+  });
+
+  LIMITS.unpackedBytes = 10;
+  try {
+    await assert.rejects(
+      normalizeUpload({ source: sizeSource, filename: 'filtered-size.zip', staging: tmp() }),
+      (error) => error.code === 'bundle_too_large',
+    );
+  } finally {
+    LIMITS.unpackedBytes = originalLimit;
+  }
+  await assert.rejects(
+    normalizeUpload({ source: ratioSource, filename: 'filtered-ratio.zip', staging: tmp() }),
+    (error) => error.code === 'zip_bomb',
+  );
+});
+
+test('ZIP rejected diagnostics are capped while all sensitive entries remain filtered', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const entries = { 'index.html': strToU8('safe') };
+  for (let i = 0; i < 80; i += 1) entries[`.env.${i}`] = strToU8(`SECRET_${i}=value`);
+  const staging = tmp();
+
+  const result = await normalizeUpload({
+    source: zipFile(entries), filename: 'many-sensitive.zip', staging,
+  });
+
+  assert.equal(result.rejected.length, 50);
+  assert.equal(existsSync(join(staging, '.env.79')), false);
+});
+
 test('ZIP executable node_modules and macOS metadata entries are skipped before executable rejection', async () => {
   const { normalizeUpload } = await import('../src/services/archive-input.js');
   const source = zipFile({

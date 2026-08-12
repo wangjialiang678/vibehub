@@ -3,65 +3,130 @@ import { createWriteStream, mkdirSync, rmSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import { db, now } from '../lib/db.js';
-import { issueToken, authRequired, countDevices } from '../lib/auth.js';
+import { authRequired } from '../lib/auth.js';
 import { paths, LIMITS } from '../lib/config.js';
 import { projectSnapshot } from './_shared.js';
-import { findActiveDuplicateVersion, SubmissionError, submitVersion } from '../services/version-submission.js';
+import { browserSubmissionGuard } from '../services/submission-guard.js';
+import {
+  findActiveDuplicateVersion,
+  SubmissionError,
+  submitVersion,
+  validateSubmissionMeta,
+} from '../services/version-submission.js';
+import { bindInvite, normalizeInviteCode } from '../services/invite-access.js';
 
-const err = (reply, code, status, message, hint) =>
-  reply.code(status).send({ error: { code, message, hint } });
+const err = (reply, code, status, message, hint, extra = {}) =>
+  reply.code(status).send({ error: { code, message, ...(hint ? { hint } : {}), ...extra } });
 
-export default async function skillRoutes(app, { diagnosisQueue }) {
+export async function handleSkillSubmissionRequest(req, reply, {
+  diagnosisQueue,
+  multipartErrors,
+  submissionGuard = browserSubmissionGuard,
+}) {
+  const projectId = req.auth.project_id;
+  if (!projectId) return err(reply, 'no_project', 404, '这个身份没有绑定项目。');
+
+  // 必须在读取上传体前占用与网页入口共享的项目槽，先挡住并发的网络、
+  // 临时磁盘和解包开销。共享提交服务不 acquire 此 guard，避免同锁重入。
+  const permit = submissionGuard.acquire(projectId);
+  if (!permit.ok) {
+    if (permit.retryAfterSeconds) reply.header('retry-after', permit.retryAfterSeconds);
+    return err(reply, permit.code, permit.status, permit.message, null,
+      permit.retryAfterSeconds ? { retry_after_seconds: permit.retryAfterSeconds } : {});
+  }
+
+  let meta = {};
+  let metaSeen = false;
+  let tmpFile = null;
+  let filename = null;
+  let delegated = false;
+  mkdirSync(paths.tmp, { recursive: true });
+
+  try {
+    for await (const part of req.parts()) {
+      if (part.type === 'file' && part.fieldname === 'bundle') {
+        if (tmpFile) {
+          part.file.resume();
+          throw new SubmissionError('multiple_bundles', '一次只能提交一个内容包。', 400);
+        }
+        tmpFile = join(paths.tmp, `up_${nanoid(10)}.upload`);
+        filename = part.filename;
+        await pipeline(part.file, createWriteStream(tmpFile));
+        if (part.file.truncated) {
+          throw new SubmissionError(
+            'bundle_too_large',
+            `上传包超过 ${Math.round(LIMITS.bundleBytes / 1024 / 1024)} MB。`,
+            413,
+            '大图片、音频请用平台的文件上传接口，不要打进网页包',
+          );
+        }
+      } else if (part.type === 'file') {
+        part.file.resume();
+      } else if (part.type === 'field' && part.fieldname === 'meta') {
+        if (metaSeen) throw new SubmissionError('invalid_meta', '提交说明只能提供一次。', 400);
+        metaSeen = true;
+        try { meta = JSON.parse(part.value); }
+        catch { throw new SubmissionError('invalid_meta', '提交说明格式不正确，请重新填写。', 400); }
+      }
+    }
+    if (!tmpFile) throw new SubmissionError('missing_bundle', '没有收到上传的内容包。', 400);
+
+    // 与网页入口保持同一记账边界：唯一 bundle 完整落盘且 meta 合法才计次。
+    meta = validateSubmissionMeta(meta);
+    permit.recordAttempt();
+    req.log.info({ project_id: projectId, submitted_via: 'skill' }, 'Skill 提交已接收');
+
+    delegated = true;
+    const result = await submitVersion({
+      projectId,
+      userId: req.auth.user_id,
+      auth: req.auth,
+      source: tmpFile,
+      filename,
+      meta,
+      submittedVia: 'skill',
+      diagnosisQueue,
+    });
+    req.log.info({ project_id: projectId, version_id: result.version_id, result: 'created' }, 'Skill 提交完成');
+    return reply.code(201).send(result);
+  } catch (error) {
+    if (error instanceof SubmissionError) {
+      req.log.info({ project_id: projectId, result: error.code }, 'Skill 提交未完成');
+      return err(reply, error.code, error.status, error.message, error.hint);
+    }
+    if (multipartErrors?.RequestFileTooLargeError && error instanceof multipartErrors.RequestFileTooLargeError) {
+      return err(reply, 'bundle_too_large', 413,
+        `上传包超过 ${Math.round(LIMITS.bundleBytes / 1024 / 1024)} MB。`,
+        '大图片、音频请用平台的文件上传接口，不要打进网页包');
+    }
+    req.log.error({ error, project_id: projectId }, 'Skill submit failed');
+    return err(reply, 'bundle_invalid', 400, '这个内容包没法解开，可能损坏了。', '重新运行一次 vibehub deploy');
+  } finally {
+    permit.release();
+    // 委托后由共享服务统一清理；multipart 解析中断时由路由收尾。
+    if (!delegated && tmpFile) rmSync(tmpFile, { force: true });
+  }
+}
+
+export default async function skillRoutes(app, {
+  diagnosisQueue,
+  inviteLimiter,
+  submissionGuard = browserSubmissionGuard,
+}) {
   // ── 绑定：邀请码换凭证。入口，无需鉴权 ────────────────────────────
   app.post('/api/skill/bind', async (req, reply) => {
     const { code, device_name } = req.body || {};
     if (!code) return err(reply, 'missing_code', 400, '请提供邀请码。', '用法：vibehub bind <邀请码>');
-
-    const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(String(code).trim().toUpperCase());
-    if (!invite) return err(reply, 'invite_not_found', 404, '这个邀请码不存在，检查一下有没有输错。', '注意区分数字 0 和字母 O');
-    if (invite.status === 'revoked') return err(reply, 'invite_revoked', 403, '这个邀请码已经被撤销了。', '找老师要一个新的');
-    if (invite.expires_at && invite.expires_at < now()) return err(reply, 'invite_expired', 403, '这个邀请码已经过期了。', '找老师要一个新的');
-    if (countDevices(invite.code) >= invite.max_devices)
-      return err(reply, 'invite_device_limit', 403,
-        `这个邀请码最多绑定 ${invite.max_devices} 台设备，已经用完了。`, '让老师撤销旧设备，或者要一个新码');
-
-    const camp = db.prepare('SELECT * FROM camps WHERE id = ?').get(invite.camp_id);
-    let user = invite.bound_user_id ? db.prepare('SELECT * FROM users WHERE id = ?').get(invite.bound_user_id) : null;
-    let project = invite.bound_project_id ? db.prepare('SELECT * FROM projects WHERE id = ?').get(invite.bound_project_id) : null;
-
-    if (!user) {
-      const uid = 'u_' + nanoid(10);
-      const uname = `student-${nanoid(6).toLowerCase()}`;
-      db.prepare('INSERT INTO users (id,username,display_name,created_at) VALUES (?,?,?,?)')
-        .run(uid, uname, '新学员', now());
-      db.prepare('INSERT OR IGNORE INTO camp_members (camp_id,user_id,role,joined_at) VALUES (?,?,?,?)')
-        .run(camp.id, uid, invite.role, now());
-      user = db.prepare('SELECT * FROM users WHERE id = ?').get(uid);
+    const normalized = normalizeInviteCode(code);
+    if (inviteLimiter.isBlocked(req.ip, normalized)) {
+      return err(reply, 'invite_rate_limited', 429, '尝试次数太多，请 10 分钟后再试。');
     }
-    if (!project && invite.role === 'student') {
-      const pid = 'p_' + nanoid(10);
-      const slug = `project-${nanoid(6).toLowerCase()}`;
-      db.prepare(`INSERT INTO projects (id,camp_id,owner_user_id,slug,title,created_at,updated_at)
-                  VALUES (?,?,?,?,?,?,?)`)
-        .run(pid, camp.id, user.id, slug, '我的作品', now(), now());
-      project = db.prepare('SELECT * FROM projects WHERE id = ?').get(pid);
+    const result = bindInvite(normalized, { kind: 'skill', deviceName: device_name || '未命名设备' });
+    if (result.error) {
+      inviteLimiter.recordFailure(req.ip, normalized);
+      return err(reply, ...result.error);
     }
-
-    db.prepare(`UPDATE invites SET status='bound', bound_user_id=?, bound_project_id=?, bound_at=COALESCE(bound_at,?) WHERE code=?`)
-      .run(user.id, project?.id ?? null, now(), invite.code);
-
-    const token = issueToken({
-      kind: 'skill', userId: user.id, campId: camp.id, projectId: project?.id,
-      role: invite.role, inviteCode: invite.code, deviceName: device_name || '未命名设备',
-    });
-
-    return {
-      token,
-      user: { id: user.id, username: user.username, display_name: user.display_name },
-      camp: { id: camp.id, slug: camp.slug, name: camp.name },
-      project: project ? { id: project.id, slug: project.slug, title: project.title } : null,
-      message: `已连接到《${camp.name}》${project ? `，你的作品：${project.title}` : ''}`,
-    };
+    return result;
   });
 
   // ── 项目状态 ─────────────────────────────────────────────────────
@@ -80,56 +145,10 @@ export default async function skillRoutes(app, { diagnosisQueue }) {
   });
 
   // ── 提交版本 ─────────────────────────────────────────────────────
-  app.post('/api/skill/versions', { preHandler: authRequired() }, async (req, reply) => {
-    const projectId = req.auth.project_id;
-    if (!projectId) return err(reply, 'no_project', 404, '这个身份没有绑定项目。');
-
-    let meta = {};
-    let tmpFile = null;
-    let filename = null;
-    let delegated = false;
-    mkdirSync(paths.tmp, { recursive: true });
-
-    try {
-      for await (const part of req.parts()) {
-        if (part.type === 'file' && part.fieldname === 'bundle') {
-          if (tmpFile) {
-            part.file.resume();
-            throw new SubmissionError('multiple_bundles', '一次只能提交一个内容包。', 400);
-          }
-          tmpFile = join(paths.tmp, `up_${nanoid(10)}.upload`);
-          filename = part.filename;
-          await pipeline(part.file, createWriteStream(tmpFile));
-          if (part.file.truncated) {
-            return err(reply, 'bundle_too_large', 413,
-              `上传包超过 ${Math.round(LIMITS.bundleBytes / 1024 / 1024)} MB。`,
-              '大图片、音频请用平台的文件上传接口，不要打进网页包');
-          }
-        } else if (part.type === 'field' && part.fieldname === 'meta') {
-          try { meta = JSON.parse(part.value); } catch { meta = {}; }
-        }
-      }
-      if (!tmpFile) return err(reply, 'missing_bundle', 400, '没有收到上传的内容包。');
-
-      delegated = true;
-      const result = await submitVersion({
-        projectId,
-        userId: req.auth.user_id,
-        auth: req.auth,
-        source: tmpFile,
-        filename,
-        meta,
-        submittedVia: 'skill',
-        diagnosisQueue,
-      });
-      return reply.code(201).send(result);
-    } catch (e) {
-      if (e instanceof SubmissionError) return err(reply, e.code, e.status, e.message, e.hint);
-      req.log.error({ e }, 'submit failed');
-      return err(reply, 'bundle_invalid', 400, '这个内容包没法解开，可能损坏了。', '重新运行一次 vibehub deploy');
-    } finally {
-      // 委托后由共享服务统一清理；multipart 解析中断时由路由收尾。
-      if (!delegated && tmpFile) rmSync(tmpFile, { force: true });
-    }
-  });
+  app.post('/api/skill/versions', { preHandler: authRequired() }, async (req, reply) =>
+    handleSkillSubmissionRequest(req, reply, {
+      diagnosisQueue,
+      multipartErrors: app.multipartErrors,
+      submissionGuard,
+    }));
 }

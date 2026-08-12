@@ -78,13 +78,13 @@ CREATE TABLE camp_members (                 -- 用户在某课程中的角色（
 
 ```sql
 CREATE TABLE invites (
-  code         TEXT PRIMARY KEY,            -- 人可读，如 SUMMER-7K3P（避免易混字符 0/O/1/I）
+  code         TEXT PRIMARY KEY,            -- 人可读，如 SUMMER-7K3P8M4WQH（避免易混字符 0/O/1/I）
   camp_id      TEXT NOT NULL REFERENCES camps(id),
   role         TEXT NOT NULL DEFAULT 'student',
   status       TEXT NOT NULL,               -- unused | bound | revoked | expired
   bound_user_id TEXT REFERENCES users(id),
   bound_project_id TEXT REFERENCES projects(id),
-  max_devices  INTEGER NOT NULL DEFAULT 3,  -- 一个码能绑几台 AI 工具
+  max_devices  INTEGER NOT NULL DEFAULT 3,  -- 一个码能绑几台 AI 工具；网页短期会话不计入
   expires_at   TEXT,
   created_at   TEXT NOT NULL,
   bound_at     TEXT,

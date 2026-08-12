@@ -10,12 +10,12 @@ const hash = (t) => createHash('sha256').update(t).digest('hex');
  * （老师撤销邀请码 → 该码签发的所有 token 立刻失效）。
  * 库里只存哈希。
  */
-export function issueToken({ kind, userId, campId, projectId, role, inviteCode, deviceName }) {
+export function issueToken({ kind, userId, campId, projectId, role, inviteCode, deviceName, expiresAt = null }) {
   const raw = (kind === 'skill' ? 'vhk_' : 'vhs_') + randomBytes(24).toString('base64url');
   db.prepare(
-    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,device_name,created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`
-  ).run('t_' + nanoid(12), hash(raw), kind, userId, campId, projectId ?? null, role, inviteCode ?? null, deviceName ?? null, now());
+    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,device_name,created_at,expires_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+  ).run('t_' + nanoid(12), hash(raw), kind, userId, campId, projectId ?? null, role, inviteCode ?? null, deviceName ?? null, now(), expiresAt);
   return raw;
 }
 
@@ -45,7 +45,14 @@ export function revokeInviteAndTokens(code) {
 }
 
 export function countDevices(code) {
-  return db.prepare('SELECT COUNT(*) AS n FROM tokens WHERE invite_code = ? AND revoked_at IS NULL').get(code)?.n ?? 0;
+  return db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code = ? AND kind='skill'
+                     AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)`).get(code, now())?.n ?? 0;
+}
+
+export function revokeToken(raw) {
+  if (!raw) return false;
+  return db.prepare('UPDATE tokens SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL')
+    .run(now(), hash(raw)).changes > 0;
 }
 
 const isMutation = (method) => ['POST', 'PATCH', 'DELETE'].includes(method);

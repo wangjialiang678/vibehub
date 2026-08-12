@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, join, normalize } from 'node:path';
 import { db, now } from './lib/db.js';
 import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR, previewOrigin } from './lib/config.js';
-import { authRequired, assertProjectAccess, hasAllowedCookieOrigin } from './lib/auth.js';
+import { authRequired, assertProjectAccess, hasAllowedCookieOrigin, revokeToken } from './lib/auth.js';
 import skillRoutes from './routes/skill.js';
 import submissionRoutes from './routes/submissions.js';
 import adminRoutes from './routes/admin.js';
@@ -18,6 +18,7 @@ import { probePreviewHttp } from './services/preview-probe.js';
 import { cleanupTmp, diskHealth, pruneProjectArtifacts, recoverPruneQuarantines } from './services/storage.js';
 import { authorizePreviewRequest, createPreviewGrant, previewCookieName } from './services/preview-access.js';
 import { requestUrlForLog } from './lib/preview-claims.js';
+import { bindInvite, InviteRateLimiter, normalizeInviteCode } from './services/invite-access.js';
 
 const MIME = { '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.mjs': 'application/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -56,6 +57,8 @@ function suspendedPage() {
 /** 供集成测试使用：构建 app 但不监听真实端口。 */
 export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   const app = Fastify({
+    // 生产仅监听 127.0.0.1，只信任本机 nginx 写入的 X-Forwarded-For。
+    trustProxy: '127.0.0.1',
     logger: {
       level: process.env.LOG_LEVEL || 'info',
       serializers: {
@@ -76,6 +79,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   for (const project of db.prepare('SELECT id FROM projects').all()) pruneProjectArtifacts(project.id);
 
   const diagnosisQueue = new DiagnosisQueue({ probePreview, log: app.log });
+  const inviteLimiter = new InviteRateLimiter();
   const tmpCleaner = setInterval(() => cleanupTmp(), 10 * 60 * 1000);
   tmpCleaner.unref();
   app.addHook('onClose', async () => clearInterval(tmpCleaner));
@@ -126,7 +130,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   });
   app.get('/api/internal/queue', { preHandler: authRequired(['teacher', 'admin']) }, async () => diagnosisQueue.snapshot());
 
-  await app.register(skillRoutes, { diagnosisQueue });
+  await app.register(skillRoutes, { diagnosisQueue, inviteLimiter });
   await app.register(submissionRoutes, { diagnosisQueue });
   await app.register(adminRoutes);
   await app.register(publicRoutes);
@@ -134,18 +138,26 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
 
   // ── 学员端网页接口 ──────────────────────────────────────────────
   app.post('/api/session/redeem', async (req, reply) => {
-    // 决策 3：邀请码即身份。复用 skill 的绑定逻辑，再种一个 host-only cookie。
-    const res = await app.inject({ method: 'POST', url: '/api/skill/bind', payload: { code: req.body?.code, device_name: '网页' } });
-    const data = res.json();
-    if (res.statusCode >= 400) return reply.code(res.statusCode).send(data);
+    const code = normalizeInviteCode(req.body?.code);
+    if (!code) return reply.code(400).send({ error: { code: 'missing_code', message: '请提供邀请码。' } });
+    if (inviteLimiter.isBlocked(req.ip, code)) {
+      return reply.code(429).send({ error: { code: 'invite_rate_limited', message: '尝试次数太多，请 10 分钟后再试。' } });
+    }
+    const data = bindInvite(code, { kind: 'web', deviceName: '网页' });
+    if (data.error) {
+      inviteLimiter.recordFailure(req.ip, code);
+      const [errorCode, status, message, hint] = data.error;
+      return reply.code(status).send({ error: { code: errorCode, message, hint } });
+    }
     reply.setCookie('vh_session', data.token, { path: '/', httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
-    return { user: data.user, camp: data.camp, project: data.project, role: 'student' };
+    return { user: data.user, camp: data.camp, project: data.project, role: data.role };
   });
 
   app.post('/api/session/logout', async (req, reply) => {
     if (!hasAllowedCookieOrigin(req)) {
       return reply.code(403).send({ error: { code: 'csrf_origin_invalid', message: '请从 VibeHub 控制台发起此操作。' } });
     }
+    revokeToken(req.cookies?.vh_session);
     reply.clearCookie('vh_session', { path: '/' });
     return { ok: true };
   });
@@ -196,7 +208,8 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   const previewAccess = (req, reply) => {
     reply.header('x-robots-tag', 'noindex, nofollow');
     reply.header('cache-control', 'no-store');
-    reply.header('referrer-policy', 'no-referrer');
+    // BaaS 从同域 Referer 推导项目身份；same-origin 不会向外域泄露预览路径。
+    reply.header('referrer-policy', 'same-origin');
     reply.header('x-content-type-options', 'nosniff');
     reply.header('cross-origin-resource-policy', 'same-origin');
     reply.header('content-security-policy', `frame-ancestors 'self' ${CONSOLE_ORIGIN}`);

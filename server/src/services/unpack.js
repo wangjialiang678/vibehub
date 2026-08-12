@@ -14,6 +14,7 @@ const BANNED_EXT = new Set(['.sh', '.bash', '.zsh', '.exe', '.dll', '.so', '.dyl
 const SENSITIVE_DIRS = new Set(['.git', '.aws', '.ssh']);
 const SENSITIVE_EXACT = new Set(['.env', '.npmrc', 'credentials.json']);
 const SENSITIVE_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.log']);
+const MAX_REJECTED_PATHS = 50;
 
 function hasDangerousPath(path) {
   const normalized = String(path).replace(/\\/g, '/');
@@ -181,8 +182,10 @@ export async function safeExtractZip(zipPath, destDir) {
       }
 
       let totalBytes = 0;
-      let totalCompressedBytes = 0;
       let fileCount = 0;
+      let scannedBytes = 0;
+      let scannedCompressedBytes = 0;
+      let scannedEntryCount = 0;
       let settled = false;
       const rejected = [];
       const fail = (error) => {
@@ -219,8 +222,36 @@ export async function safeExtractZip(zipPath, destDir) {
               '请删除符号链接、设备文件或其他特殊文件后重新提交'));
             return;
           }
+
+          // 被过滤的条目仍会被 ZIP 解析器读取，因此必须在过滤前占用安全预算。
+          scannedEntryCount += 1;
+          if (scannedEntryCount > LIMITS.fileCount) {
+            fail(fileCountLimitError());
+            return;
+          }
+          if (!isDirectory) {
+            if (entry.uncompressedSize > LIMITS.singleFileBytes) {
+              fail(fileLimitError(path));
+              return;
+            }
+            scannedBytes += entry.uncompressedSize;
+            scannedCompressedBytes += entry.compressedSize;
+            if (scannedBytes > LIMITS.unpackedBytes) {
+              fail(bundleLimitError());
+              return;
+            }
+            if (entry.uncompressedSize > entry.compressedSize * 100
+                || scannedBytes > scannedCompressedBytes * 100) {
+              fail(new UnpackError('zip_bomb', 'ZIP 解压缩比例超过 100:1，存在压缩炸弹风险',
+                '请重新打包网页，并避免在 ZIP 中放入超高压缩比的大文件'));
+              return;
+            }
+          }
+
           if (isSensitiveArtifactPath(path)) {
-            rejected.push({ path, reason: '敏感文件不允许上传' });
+            if (rejected.length < MAX_REJECTED_PATHS) {
+              rejected.push({ path, reason: '敏感文件不允许上传' });
+            }
             zipfile.readEntry();
             return;
           }
@@ -235,26 +266,7 @@ export async function safeExtractZip(zipPath, destDir) {
           }
 
           fileCount += 1;
-          if (fileCount > LIMITS.fileCount) {
-            fail(fileCountLimitError());
-            return;
-          }
-          if (!isDirectory && entry.uncompressedSize > LIMITS.singleFileBytes) {
-            fail(fileLimitError(path));
-            return;
-          }
           totalBytes += entry.uncompressedSize;
-          totalCompressedBytes += entry.compressedSize;
-          if (totalBytes > LIMITS.unpackedBytes) {
-            fail(bundleLimitError());
-            return;
-          }
-          if (entry.uncompressedSize > entry.compressedSize * 100
-              || totalBytes > totalCompressedBytes * 100) {
-            fail(new UnpackError('zip_bomb', 'ZIP 解压缩比例超过 100:1，存在压缩炸弹风险',
-              '请重新打包网页，并避免在 ZIP 中放入超高压缩比的大文件'));
-            return;
-          }
 
           if (isDirectory) {
             mkdirSync(join(destDir, path), { recursive: true });

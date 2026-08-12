@@ -116,6 +116,18 @@ function submit(projectId, headers, form) {
   });
 }
 
+function submitWithSkill(token, form) {
+  return app.inject({
+    method: 'POST',
+    url: '/api/skill/versions',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': `multipart/form-data; boundary=${form.boundary}`,
+    },
+    payload: form.payload,
+  });
+}
+
 function captureReply() {
   return {
     statusCode: 200,
@@ -352,6 +364,84 @@ test('网页合法提交 10 分钟最多 5 次，第 6 次返回可重试提示'
   assert.equal(limited.json().error.code, 'submission_rate_limited');
   assert.match(limited.json().error.message, /10 分钟/);
   assert.ok(limited.json().error.retry_after_seconds > 0);
+});
+
+test('Skill 在收包前占用与网页相同的项目并发槽，并在返回后释放', async () => {
+  const student = fixture();
+  const { browserSubmissionGuard } = await import('../src/services/submission-guard.js');
+  const held = browserSubmissionGuard.acquire(student.projectId);
+  assert.equal(held.ok, true);
+
+  const busy = await submitWithSkill(student.token, htmlForm('<main>并发中的 Skill 提交</main>'));
+  assert.equal(busy.statusCode, 409);
+  assert.equal(busy.json().error.code, 'submission_in_progress');
+
+  held.release();
+  const accepted = await submitWithSkill(student.token, htmlForm(
+    '<main>并发槽释放后可以提交的完整 Skill 网页作品。</main>',
+  ));
+  assert.equal(accepted.statusCode, 201);
+});
+
+test('Skill 与网页合法提交共用每项目 5 次/10 分钟额度', async () => {
+  const student = fixture();
+  for (let i = 0; i < 3; i += 1) {
+    const response = await submit(student.projectId, student.headers, htmlForm(
+      `<main>共享额度中的网页提交 ${i + 1}，内容各不相同。</main>`,
+    ));
+    assert.equal(response.statusCode, 201);
+  }
+  for (let i = 0; i < 2; i += 1) {
+    const response = await submitWithSkill(student.token, htmlForm(
+      `<main>共享额度中的 Skill 提交 ${i + 1}，内容各不相同。</main>`,
+    ));
+    assert.equal(response.statusCode, 201);
+  }
+
+  const limited = await submitWithSkill(student.token, htmlForm('<main>共享额度中的第六次提交。</main>'));
+  assert.equal(limited.statusCode, 429);
+  assert.equal(limited.json().error.code, 'submission_rate_limited');
+  assert.ok(limited.json().error.retry_after_seconds > 0);
+});
+
+test('Skill 的非法 meta 和上传中断不计次，且中断后释放并发槽', async () => {
+  const student = fixture();
+  const malformed = multipart([
+    { kind: 'field', name: 'meta', value: '{not-json' },
+    { kind: 'file', filename: 'work.html', content: '<main>不应提交</main>' },
+  ]);
+  for (let i = 0; i < 5; i += 1) {
+    const response = await submitWithSkill(student.token, malformed);
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'invalid_meta');
+  }
+
+  const { handleSkillSubmissionRequest } = await import('../src/routes/skill.js');
+  const brokenFile = Readable.from((async function* () {
+    yield Buffer.from('<main>partial');
+    throw new Error('connection interrupted');
+  })());
+  brokenFile.truncated = false;
+  const req = {
+    auth: resolveToken(student.token),
+    log: { info() {}, error() {} },
+    parts: async function* () {
+      yield { type: 'file', fieldname: 'bundle', filename: 'partial.html', file: brokenFile };
+    },
+  };
+  const reply = captureReply();
+  await handleSkillSubmissionRequest(req, reply, {
+    diagnosisQueue: null,
+    multipartErrors: app.multipartErrors,
+  });
+  assert.equal(reply.statusCode, 400);
+  assert.equal(reply.body.error.code, 'bundle_invalid');
+  assert.deepEqual(readdirSync(paths.tmp), []);
+
+  const accepted = await submitWithSkill(student.token, htmlForm(
+    '<main>解析垃圾和中断之后仍可提交的完整 Skill 网页作品。</main>',
+  ));
+  assert.equal(accepted.statusCode, 201);
 });
 
 test('限频 guard 节流回收所有项目的过期记录', async () => {

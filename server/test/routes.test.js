@@ -975,13 +975,27 @@ test('预览匿名访问返回 404，owner 与同课程老师只用 claim 换 co
     assert.equal(first.headers.location, `${previewPath}?theme=dark`);
     assert.doesNotMatch(first.body, /测试页面|location\.search|claim=/);
     assert.match(first.headers['content-security-policy'], /frame-ancestors/);
-    assert.equal(first.headers['referrer-policy'], 'no-referrer');
+    // same-origin 会让浏览器在预览页请求同域 BaaS 时附带 Referer，
+    // 同时对外域导航仍不泄露预览路径。
+    assert.equal(first.headers['referrer-policy'], 'same-origin');
     const cookie = first.headers['set-cookie'].split(';', 1)[0];
     assert.doesNotMatch(first.headers['set-cookie'], /Domain=/i);
     assert.match(first.headers['set-cookie'], /HttpOnly/i);
     const page = await app.inject({ method: 'GET', url: first.headers.location, headers: { host: granted.host, cookie } });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /测试页面/);
+    const baas = await app.inject({
+      method: 'GET',
+      url: '/baas/v1/messages',
+      headers: {
+        host: granted.host,
+        referer: `${granted.origin}${first.headers.location}`,
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+      },
+    });
+    assert.equal(baas.statusCode, 200);
     const asset = await app.inject({ method: 'GET', url: `${previewPath}style.css`, headers: { host: granted.host, cookie } });
     assert.equal(asset.statusCode, 200);
     const emptyClaim = await app.inject({ method: 'GET', url: `${previewPath}?claim=`, headers: { host: granted.host, cookie } });

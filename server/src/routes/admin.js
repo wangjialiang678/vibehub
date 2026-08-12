@@ -6,7 +6,7 @@ import { projectSnapshot, versionView, diagnosisView } from './_shared.js';
 import { pruneProjectArtifacts } from '../services/storage.js';
 
 // 邀请码去掉易混字符 0/O/1/I/L
-const codeGen = customAlphabet('ABCDEFGHJKMNPQRSTUVWXYZ23456789', 4);
+const codeGen = customAlphabet('ABCDEFGHJKMNPQRSTUVWXYZ23456789', 10);
 
 const err = (reply, code, status, message, hint) =>
   reply.code(status).send({ error: { code, message, hint } });
@@ -99,7 +99,8 @@ export default async function adminRoutes(app) {
         status: r.status, role: r.role, max_devices: r.max_devices,
         bound_user: r.bound_user, bound_project: r.bound_project,
         created_at: r.created_at, bound_at: r.bound_at,
-        devices: db.prepare('SELECT COUNT(*) AS n FROM tokens WHERE invite_code=? AND revoked_at IS NULL').get(r.code).n,
+        devices: db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code=? AND kind='skill'
+                             AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)`).get(r.code, now()).n,
       })),
     };
   });
