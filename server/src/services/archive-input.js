@@ -1,6 +1,7 @@
 import { closeSync, copyFileSync, mkdirSync, openSync, readSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { safeExtract, safeExtractZip } from './unpack.js';
+import { LIMITS } from '../lib/config.js';
+import { safeExtract, safeExtractZip, UnpackError } from './unpack.js';
 
 export class UploadFormatError extends Error {
   constructor(message, hint) {
@@ -14,11 +15,20 @@ export async function normalizeUpload({ source, filename, staging }) {
   const normalizedFilename = String(filename).toLowerCase();
   const extension = extname(normalizedFilename);
   if (extension === '.html' || extension === '.htm') {
+    const totalBytes = statSync(source).size;
+    if (totalBytes > LIMITS.singleFileBytes) {
+      throw new UnpackError('file_too_large',
+        `HTML 文件超过 ${Math.round(LIMITS.singleFileBytes / 1024 / 1024)} MB 的单文件上限`,
+        '请压缩图片、音频或视频后再提交');
+    }
+    if (totalBytes > LIMITS.unpackedBytes) {
+      throw new UnpackError('bundle_too_large', 'HTML 文件太大了', '请压缩页面资源后再提交');
+    }
     mkdirSync(staging, { recursive: true });
     copyFileSync(source, join(staging, 'index.html'));
     return {
       format: 'html',
-      totalBytes: statSync(source).size,
+      totalBytes,
       fileCount: 1,
       rejected: [],
     };

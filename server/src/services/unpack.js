@@ -146,15 +146,20 @@ export async function safeExtract(tgzPath, destDir) {
 /** 流式解包浏览器上传的 ZIP，一次只处理一个条目。 */
 export async function safeExtractZip(zipPath, destDir) {
   mkdirSync(destDir, { recursive: true });
+  const cleanupDest = () => {
+    try { rmSync(destDir, { recursive: true, force: true }); } catch { /* 保留原始解包错误 */ }
+  };
 
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true, autoClose: true }, (openError, zipfile) => {
       if (openError) {
+        cleanupDest();
         reject(new UnpackError('bundle_invalid', 'ZIP 压缩包无法读取', '请重新导出 ZIP 后再提交'));
         return;
       }
 
       let totalBytes = 0;
+      let totalCompressedBytes = 0;
       let fileCount = 0;
       let settled = false;
       const rejected = [];
@@ -162,6 +167,7 @@ export async function safeExtractZip(zipPath, destDir) {
         if (settled) return;
         settled = true;
         zipfile.close();
+        cleanupDest();
         reject(error instanceof UnpackError
           ? error
           : new UnpackError('bundle_invalid', 'ZIP 压缩包无法读取', '请重新导出 ZIP 后再提交'));
@@ -216,8 +222,15 @@ export async function safeExtractZip(zipPath, destDir) {
             return;
           }
           totalBytes += entry.uncompressedSize;
+          totalCompressedBytes += entry.compressedSize;
           if (totalBytes > LIMITS.unpackedBytes) {
             fail(bundleLimitError());
+            return;
+          }
+          if (entry.uncompressedSize > entry.compressedSize * 100
+              || totalBytes > totalCompressedBytes * 100) {
+            fail(new UnpackError('zip_bomb', 'ZIP 解压缩比例超过 100:1，存在压缩炸弹风险',
+              '请重新打包网页，并避免在 ZIP 中放入超高压缩比的大文件'));
             return;
           }
 

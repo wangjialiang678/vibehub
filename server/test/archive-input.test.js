@@ -145,6 +145,47 @@ test('ZIP entry larger than the single-file limit rejects the bundle before extr
   assert.equal(existsSync(join(staging, 'oversized.dat')), false);
 });
 
+test('single HTML larger than the single-file limit is rejected without writing staging', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const source = join(tmp(), 'oversized.html');
+  const staging = tmp();
+  writeFileSync(source, Buffer.alloc(20 * 1024 * 1024 + 1, 0x20));
+
+  await assert.rejects(
+    normalizeUpload({ source, filename: 'oversized.html', staging }),
+    (error) => error.code === 'file_too_large',
+  );
+  assert.equal(existsSync(join(staging, 'index.html')), false);
+});
+
+test('ZIP exceeding the 100:1 decompression ratio is rejected as a zip bomb', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const source = zipFile({ 'highly-compressible.txt': new Uint8Array(10 * 1024 * 1024) });
+  const staging = tmp();
+
+  await assert.rejects(
+    normalizeUpload({ source, filename: 'bomb.zip', staging }),
+    (error) => error.code === 'zip_bomb' && /压缩比/.test(error.message),
+  );
+  assert.equal(existsSync(join(staging, 'highly-compressible.txt')), false);
+});
+
+test('ZIP failure removes files extracted before a later dangerous entry', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const source = zipFile({
+    'index.html': strToU8('was written first'),
+    'later.sh': strToU8('#!/bin/sh'),
+  });
+  const staging = tmp();
+
+  await assert.rejects(
+    normalizeUpload({ source, filename: 'partial.zip', staging }),
+    (error) => error.code === 'bundle_invalid',
+  );
+  assert.equal(existsSync(join(staging, 'index.html')), false);
+  assert.equal(existsSync(join(staging, 'later.sh')), false);
+});
+
 test('ZIP executable and special Unix entries make the entire upload invalid', async () => {
   const { normalizeUpload } = await import('../src/services/archive-input.js');
   const executable = zipFile({
