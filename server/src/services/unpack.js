@@ -191,14 +191,14 @@ export async function safeExtractZip(zipPath, destDir) {
               '请删除符号链接、设备文件或其他特殊文件后重新提交'));
             return;
           }
-          if (!isDirectory && (BANNED_EXT.has(extname(path).toLowerCase()) || (unixMode & 0o111))) {
-            fail(new UnpackError('bundle_invalid', `内容包包含可执行文件：${path}`,
-              '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
-            return;
-          }
           if (isSensitiveArtifactPath(path)) {
             rejected.push({ path, reason: '敏感文件不允许上传' });
             zipfile.readEntry();
+            return;
+          }
+          if (!isDirectory && (BANNED_EXT.has(extname(path).toLowerCase()) || (unixMode & 0o111))) {
+            fail(new UnpackError('bundle_invalid', `内容包包含可执行文件：${path}`,
+              '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
             return;
           }
           if (isMetadataPath(path)) {

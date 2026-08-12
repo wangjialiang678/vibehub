@@ -97,6 +97,23 @@ test('ZIP sensitive paths are filtered and harmless metadata is skipped', async 
   assert.ok(result.rejected.some((item) => item.path.includes('.ssh')));
 });
 
+test('ZIP sensitive executable entries are filtered and recorded before executable rejection', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const source = zipFile({
+    'index.html': strToU8('safe'),
+    '.env': [strToU8('TOKEN=secret'), { os: 3, attrs: 0o100755 << 16 }],
+    '.git/hooks/pre-commit': [strToU8('#!/bin/sh'), { os: 3, attrs: 0o100755 << 16 }],
+  });
+  const staging = tmp();
+
+  const result = await normalizeUpload({ source, filename: 'bundle.zip', staging });
+
+  assert.equal(existsSync(join(staging, '.env')), false);
+  assert.equal(existsSync(join(staging, '.git')), false);
+  assert.ok(result.rejected.some((item) => item.path === '.env'));
+  assert.ok(result.rejected.some((item) => item.path === '.git/hooks/pre-commit'));
+});
+
 test('ZIP entry larger than the single-file limit rejects the bundle before extraction', async () => {
   const { normalizeUpload } = await import('../src/services/archive-input.js');
   const source = zipFile({
