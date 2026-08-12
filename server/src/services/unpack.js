@@ -196,13 +196,13 @@ export async function safeExtractZip(zipPath, destDir) {
             zipfile.readEntry();
             return;
           }
+          if (isMetadataPath(path)) {
+            zipfile.readEntry();
+            return;
+          }
           if (!isDirectory && (BANNED_EXT.has(extname(path).toLowerCase()) || (unixMode & 0o111))) {
             fail(new UnpackError('bundle_invalid', `内容包包含可执行文件：${path}`,
               '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
-            return;
-          }
-          if (isMetadataPath(path)) {
-            zipfile.readEntry();
             return;
           }
 

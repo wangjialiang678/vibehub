@@ -114,6 +114,22 @@ test('ZIP sensitive executable entries are filtered and recorded before executab
   assert.ok(result.rejected.some((item) => item.path === '.git/hooks/pre-commit'));
 });
 
+test('ZIP executable node_modules and macOS metadata entries are skipped before executable rejection', async () => {
+  const { normalizeUpload } = await import('../src/services/archive-input.js');
+  const source = zipFile({
+    'index.html': strToU8('safe'),
+    'node_modules/pkg/cli.js': [strToU8('#!/usr/bin/env node'), { os: 3, attrs: 0o100755 << 16 }],
+    '__MACOSX/._index.html': [strToU8('metadata'), { os: 3, attrs: 0o100755 << 16 }],
+  });
+  const staging = tmp();
+
+  const result = await normalizeUpload({ source, filename: 'bundle.zip', staging });
+
+  assert.equal(result.format, 'zip');
+  assert.equal(existsSync(join(staging, 'node_modules')), false);
+  assert.equal(existsSync(join(staging, '__MACOSX')), false);
+});
+
 test('ZIP entry larger than the single-file limit rejects the bundle before extraction', async () => {
   const { normalizeUpload } = await import('../src/services/archive-input.js');
   const source = zipFile({
