@@ -1,6 +1,6 @@
 import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,7 +13,7 @@ const { buildApp } = await import('../src/index.js');
 const { db, now } = await import('../src/lib/db.js');
 const { issueToken, resolveToken } = await import('../src/lib/auth.js');
 const { paths } = await import('../src/lib/config.js');
-const { pruneProjectArtifacts } = await import('../src/services/storage.js');
+const { cleanupTmp, pruneProjectArtifacts } = await import('../src/services/storage.js');
 const { makePreview } = await import('../src/services/publish.js');
 const {
   SubmissionError,
@@ -259,32 +259,48 @@ test('诊断入队失败会恢复旧 pending 并清除新版本的数据库和�
   assert.equal(existsSync(upload.source), false);
 });
 
-test('产物清理部分失败不影响提交，失败项保持完整未标记且后续项继续清理', async () => {
+test('产物清理 COMMIT 部分失败不影响提交，失败项恢复且后续项继续清理', async () => {
   const f = fixture();
   const first = await submit(f);
   const oldVersionId = first.result.version_id;
   db.prepare('INSERT INTO reviews (id,version_id,project_id,camp_id,status,created_at) VALUES (?,?,?,?,?,?)')
     .run(`r_prune_pending_${sequence}`, oldVersionId, f.projectId, f.campId, 'pending', now());
-  const failed = addStoredVersion(f, { seq: 20, previewId: `f${String(sequence).padStart(15, '0')}` });
-  const later = addStoredVersion(f, { seq: 21, previewId: `s${String(sequence).padStart(15, '0')}` });
-  rmSync(failed.previewPath, { force: true });
-  mkdirSync(failed.previewPath, { recursive: true });
+  db.prepare("UPDATE projects SET live_version_id=?,publish_status='published' WHERE id=?").run(oldVersionId, f.projectId);
+  // 项目索引按 seq DESC 扫描：先让 21 失败，再验证 20 仍会继续清理。
+  const later = addStoredVersion(f, { seq: 20, previewId: `s${String(sequence).padStart(15, '0')}` });
+  const failed = addStoredVersion(f, { seq: 21, previewId: `f${String(sequence).padStart(15, '0')}` });
   const upload = htmlSource('<main>这是最终清理故障时仍应保持可诊断的新版本。</main>');
   const warnings = [];
   const queue = {
     log: { warn(detail, message) { warnings.push({ detail, message }); } },
     enqueue: f.diagnosisQueue.enqueue,
   };
+  const originalExec = db.exec.bind(db);
+  let commitFailed = false;
+  db.exec = (sql) => {
+    if (!commitFailed && String(sql).trim().toUpperCase() === 'COMMIT') {
+      commitFailed = true;
+      throw new Error('forced first prune commit failure');
+    }
+    return originalExec(sql);
+  };
 
-  const result = await submitVersion({
-    projectId: f.projectId, userId: f.userId, auth: f.auth,
-    source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: queue,
-  });
+  let result;
+  try {
+    result = await submitVersion({
+      projectId: f.projectId, userId: f.userId, auth: f.auth,
+      source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: queue,
+    });
+  } finally {
+    db.exec = originalExec;
+  }
 
+  assert.equal(commitFailed, true);
   assert.equal(db.prepare('SELECT pending_version_id FROM projects WHERE id=?').get(f.projectId).pending_version_id, result.version_id);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM versions WHERE id=?').get(result.version_id).n, 1);
   assert.equal(existsSync(join(paths.versions, result.version_id, 'index.html')), true);
   assert.equal(f.enqueued.at(-1).versionId, result.version_id);
+  assert.deepEqual(warnings[0]?.detail?.failures?.map((item) => item.version_id), [failed.versionId]);
   assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(failed.versionId).artifact_pruned, 0);
   assert.equal(existsSync(failed.dir), true);
   assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(later.versionId).artifact_pruned, 1);
@@ -314,6 +330,110 @@ test('数据库清理标记失败时不先删除版本目录，并继续清理�
   assert.equal(existsSync(failed.dir), true);
   assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(later.versionId).artifact_pruned, 1);
   assert.equal(existsSync(later.dir), false);
+});
+
+test('版本目录和预览链接处理后 COMMIT 失败会完整恢复产物与数据库标记', () => {
+  const f = fixture();
+  const failed = addStoredVersion(f, { seq: 40, previewId: `c${String(sequence).padStart(15, '0')}` });
+  const originalExec = db.exec.bind(db);
+  let commitFailed = false;
+  db.exec = (sql) => {
+    if (!commitFailed && String(sql).trim().toUpperCase() === 'COMMIT') {
+      commitFailed = true;
+      throw new Error('forced commit failure after quarantine');
+    }
+    return originalExec(sql);
+  };
+
+  let cleanup;
+  try {
+    cleanup = pruneProjectArtifacts(f.projectId);
+  } finally {
+    db.exec = originalExec;
+  }
+
+  assert.equal(commitFailed, true);
+  assert.deepEqual(cleanup.failures.map((item) => item.version_id), [failed.versionId]);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(failed.versionId).artifact_pruned, 0);
+  assert.equal(existsSync(join(failed.dir, 'index.html')), true);
+  assert.equal(existsSync(failed.previewPath), true);
+  assert.equal(lstatSync(failed.previewPath).isSymbolicLink(), true);
+});
+
+test('COMMIT 回滚后恢复 rename 失败会保留唯一产物隔离区且不被 tmp 清理', () => {
+  const f = fixture();
+  const failed = addStoredVersion(f, { seq: 41, previewId: `x${String(sequence).padStart(15, '0')}` });
+  const originalExec = db.exec.bind(db);
+  let commitFailed = false;
+  db.exec = (sql) => {
+    if (!commitFailed && String(sql).trim().toUpperCase() === 'COMMIT') {
+      commitFailed = true;
+      // 原路径冲突模拟 rollback 后版本目录无法 rename 回原位。
+      mkdirSync(failed.dir, { recursive: true });
+      writeFileSync(join(failed.dir, 'conflict.txt'), 'occupied');
+      throw new Error('forced commit and recovery failure');
+    }
+    return originalExec(sql);
+  };
+
+  let cleanup;
+  try {
+    cleanup = pruneProjectArtifacts(f.projectId);
+  } finally {
+    db.exec = originalExec;
+  }
+
+  const recoveryDirs = readdirSync(paths.tmp).filter((entry) => entry.startsWith('prune_recovery_'));
+  assert.equal(commitFailed, true);
+  assert.equal(cleanup.failures[0].recovery_errors.length, 1);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(failed.versionId).artifact_pruned, 0);
+  assert.equal(recoveryDirs.length, 1);
+  assert.equal(existsSync(join(paths.tmp, recoveryDirs[0], 'version', 'index.html')), true);
+  cleanupTmp(0);
+  assert.equal(existsSync(join(paths.tmp, recoveryDirs[0], 'version', 'index.html')), true);
+});
+
+test('COMMIT 成功后的隔离区删除失败会留下可由 tmp 清理收敛的 delete 标记', () => {
+  const f = fixture();
+  const obsolete = addStoredVersion(f, { seq: 42, previewId: `d${String(sequence).padStart(15, '0')}` });
+  let removeAttempted = false;
+
+  const cleanup = pruneProjectArtifacts(f.projectId, {
+    removeQuarantine() {
+      removeAttempted = true;
+      throw new Error('forced committed quarantine removal failure');
+    },
+  });
+
+  const deleteDirs = readdirSync(paths.tmp).filter((entry) => entry.startsWith('prune_delete_'));
+  assert.equal(removeAttempted, true);
+  assert.deepEqual(cleanup, { pruned: 1, failures: [] });
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(obsolete.versionId).artifact_pruned, 1);
+  assert.equal(existsSync(obsolete.dir), false);
+  assert.equal(existsSync(obsolete.previewPath), false);
+  assert.equal(deleteDirs.length, 1);
+
+  const deletePath = join(paths.tmp, deleteDirs[0]);
+  utimesSync(deletePath, new Date(0), new Date(0));
+  cleanupTmp(0);
+  assert.equal(existsSync(deletePath), false);
+});
+
+test('tmp 清理保留恢复隔离区但回收已提交的 work 和 delete 隔离区', () => {
+  const recovery = join(paths.tmp, 'prune_recovery_keep');
+  const work = join(paths.tmp, 'prune_work_old');
+  const deletion = join(paths.tmp, 'prune_delete_old');
+  for (const path of [recovery, work, deletion]) {
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, 'artifact.txt'), 'data');
+    utimesSync(path, new Date(0), new Date(0));
+  }
+
+  cleanupTmp(0);
+
+  assert.equal(existsSync(recovery), true);
+  assert.equal(existsSync(work), false);
+  assert.equal(existsSync(deletion), false);
 });
 
 test('预览授权失败会在诊断入队前回滚新版本', async () => {

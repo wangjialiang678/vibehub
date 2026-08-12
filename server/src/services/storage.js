@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, rmSync, statSync, statfsSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { db } from '../lib/db.js';
 import { LIMITS, paths } from '../lib/config.js';
-import { makePreview, previewLink, versionDir } from './publish.js';
+import { previewLink, versionDir } from './publish.js';
 
 export class ProjectQuotaError extends Error {
   constructor(usedBytes, incomingBytes) {
@@ -53,33 +54,65 @@ export function assertProjectedQuota(projectId, incomingBytes) {
   return { used_bytes: used, quota_bytes: LIMITS.projectDiskBytes };
 }
 
-export function pruneProjectArtifacts(projectId) {
+export function pruneProjectArtifacts(projectId, { removeQuarantine = rmSync } = {}) {
   const retained = retainedVersionIds(projectId);
   const versions = db.prepare('SELECT id,preview_id FROM versions WHERE project_id=? AND artifact_pruned=0').all(projectId);
   let pruned = 0;
   const failures = [];
   for (const version of versions) {
     if (retained.has(version.id)) continue;
+    const versionPath = versionDir(version.id);
+    const previewPath = previewLink(version.preview_id);
+    const quarantineId = randomUUID();
+    const quarantine = join(paths.tmp, `prune_recovery_${quarantineId}`);
+    const deleteQuarantine = join(paths.tmp, `prune_delete_${quarantineId}`);
+    const quarantinedVersion = join(quarantine, 'version');
+    const quarantinedPreview = join(quarantine, 'preview');
+    let versionMoved = false;
+    let previewMoved = false;
     let transactionStarted = false;
     try {
-      // 每个版本独立提交：数据库更新若失败时，文件系统尚未动；文件删除失败则回滚标记。
+      mkdirSync(quarantine, { recursive: true });
+      // lstat 能识别目标已丢失的断链；rename 移动的是链接本身，不会跟随目标。
+      try { lstatSync(previewPath); renameSync(previewPath, quarantinedPreview); previewMoved = true; }
+      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      try { lstatSync(versionPath); renameSync(versionPath, quarantinedVersion); versionMoved = true; }
+      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+
+      // 文件均已可恢复地隔离后，才提交数据库清理标记。
       db.exec('BEGIN IMMEDIATE');
       transactionStarted = true;
       db.prepare('UPDATE versions SET artifact_pruned=1 WHERE id=?').run(version.id);
-      rmSync(previewLink(version.preview_id), { force: true });
-      rmSync(versionDir(version.id), { recursive: true, force: true });
       db.exec('COMMIT');
       transactionStarted = false;
       pruned += 1;
+      // 提交后先把受保护隔离区改名为待删除；删除失败可由 cleanupTmp 安全收敛。
+      try {
+        renameSync(quarantine, deleteQuarantine);
+        removeQuarantine(deleteQuarantine, { recursive: true, force: true });
+      } catch { /* rename 失败仍保守保留 recovery；删除失败由 cleanupTmp 收敛 delete */ }
     } catch (error) {
       if (transactionStarted) {
         try { db.exec('ROLLBACK'); } catch { /* 记录原始清理错误 */ }
       }
-      // 若预览链接已删但版本目录仍完整，恢复链接以保持未清理版本可预览。
-      if (existsSync(versionDir(version.id)) && !existsSync(previewLink(version.preview_id))) {
-        try { makePreview({ previewId: version.preview_id, versionId: version.id }); } catch { /* 下次清理继续处理 */ }
+      const recoveryErrors = [];
+      // 先恢复链接目标，再恢复链接本身；两者均使用同文件系统原子 rename。
+      if (versionMoved) {
+        try { renameSync(quarantinedVersion, versionPath); }
+        catch (recoveryError) { recoveryErrors.push(recoveryError); }
       }
-      failures.push({ version_id: version.id, error });
+      if (previewMoved) {
+        try { renameSync(quarantinedPreview, previewPath); }
+        catch (recoveryError) { recoveryErrors.push(recoveryError); }
+      }
+      let recoveryPath = null;
+      if (recoveryErrors.length) {
+        // 隔离区里仍有唯一副本时绝不能删除，保留受保护名称等待人工/后续恢复。
+        recoveryPath = quarantine;
+      } else {
+        try { rmSync(quarantine, { recursive: true, force: true }); } catch { /* 没有唯一副本，可由 cleanupTmp 回收 */ }
+      }
+      failures.push({ version_id: version.id, error, recovery_errors: recoveryErrors, recovery_path: recoveryPath });
     }
   }
   return { pruned, failures };
@@ -90,6 +123,8 @@ export function cleanupTmp(maxAgeMs = 60 * 60 * 1000) {
   const cutoff = Date.now() - maxAgeMs;
   let removed = 0;
   for (const entry of readdirSync(paths.tmp, { withFileTypes: true })) {
+    // 清理恢复失败时，这里可能保存着 artifact 的唯一副本，不能按普通临时文件删除。
+    if (entry.name.startsWith('prune_recovery_')) continue;
     const target = join(paths.tmp, entry.name);
     try {
       if (statSync(target).mtimeMs >= cutoff) continue;
