@@ -1,7 +1,9 @@
 import * as tar from 'tar';
+import yauzl from 'yauzl';
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, existsSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, existsSync, createWriteStream } from 'node:fs';
+import { join, relative, extname, dirname } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { LIMITS } from '../lib/config.js';
 
 export class UnpackError extends Error {
@@ -12,6 +14,35 @@ const BANNED_EXT = new Set(['.sh', '.bash', '.zsh', '.exe', '.dll', '.so', '.dyl
 const SENSITIVE_DIRS = new Set(['.git', '.aws', '.ssh']);
 const SENSITIVE_EXACT = new Set(['.env', '.npmrc', 'credentials.json']);
 const SENSITIVE_EXTENSIONS = new Set(['.pem', '.key', '.pfx', '.p12', '.log']);
+
+function hasDangerousPath(path) {
+  const normalized = String(path).replace(/\\/g, '/');
+  return normalized.startsWith('/')
+    || /^[a-zA-Z]:/.test(normalized)
+    || normalized.split('/').includes('..');
+}
+
+function isMetadataPath(path) {
+  return /(^|\/)(\._[^/]*|\.DS_Store)$/.test(path)
+    || /(^|\/)__MACOSX(\/|$)/.test(path)
+    || /(^|\/)node_modules(\/|$)/.test(path);
+}
+
+function fileLimitError(path) {
+  return new UnpackError('file_too_large',
+    `文件 ${path} 超过 ${Math.round(LIMITS.singleFileBytes / 1024 / 1024)} MB 的单文件上限`,
+    '大的图片、音频、视频建议用平台的文件上传接口，不要打进网页包里');
+}
+
+function bundleLimitError() {
+  return new UnpackError('bundle_too_large', '解压后的内容太大了',
+    '把大文件挪出网页目录，或用平台的文件上传接口');
+}
+
+function fileCountLimitError() {
+  return new UnpackError('too_many_files', `文件数超过 ${LIMITS.fileCount} 个上限`,
+    '检查一下是不是把 node_modules 之类的目录打进去了');
+}
 
 /** 敏感凭证和本地配置绝不能进入公开版本产物。 */
 export function isSensitiveArtifactPath(path) {
@@ -53,8 +84,8 @@ export async function safeExtract(tgzPath, destDir) {
         dangerousEntry ||= { path, kind: '特殊条目' };
         return false;
       }
-      if (path.startsWith('/') || path.includes('..')) {
-        rejected.push({ path, reason: '路径不合法' });
+      if (hasDangerousPath(path)) {
+        dangerousEntry ||= { path, kind: '危险路径' };
         return false;
       }
       // macOS 的 tar 会给每个文件附带一份 AppleDouble（`._xxx`）存扩展属性，
@@ -101,11 +132,118 @@ export async function safeExtract(tgzPath, destDir) {
   if (dangerousEntry) {
     const executable = dangerousEntry.kind === '可执行文件';
     throw new UnpackError('bundle_invalid', `内容包包含${dangerousEntry.kind}：${dangerousEntry.path}`,
-      executable ? '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件' : '请删除符号链接、设备文件或其他特殊文件后重新提交');
+      executable
+        ? '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'
+        : dangerousEntry.kind === '危险路径'
+          ? '请删除绝对路径或包含 .. 的路径后重新提交'
+          : '请删除符号链接、设备文件或其他特殊文件后重新提交');
   }
   if (limitError) throw limitError;
 
   return { totalBytes, fileCount, rejected };
+}
+
+/** 流式解包浏览器上传的 ZIP，一次只处理一个条目。 */
+export async function safeExtractZip(zipPath, destDir) {
+  mkdirSync(destDir, { recursive: true });
+
+  return new Promise((resolve, reject) => {
+    yauzl.open(zipPath, { lazyEntries: true, autoClose: true }, (openError, zipfile) => {
+      if (openError) {
+        reject(new UnpackError('bundle_invalid', 'ZIP 压缩包无法读取', '请重新导出 ZIP 后再提交'));
+        return;
+      }
+
+      let totalBytes = 0;
+      let fileCount = 0;
+      let settled = false;
+      const rejected = [];
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        zipfile.close();
+        reject(error instanceof UnpackError
+          ? error
+          : new UnpackError('bundle_invalid', 'ZIP 压缩包无法读取', '请重新导出 ZIP 后再提交'));
+      };
+
+      zipfile.once('error', fail);
+      zipfile.once('end', () => {
+        if (settled) return;
+        settled = true;
+        resolve({ totalBytes, fileCount, rejected });
+      });
+      zipfile.on('entry', (entry) => {
+        try {
+          const path = entry.fileName;
+          if (hasDangerousPath(path)) {
+            fail(new UnpackError('bundle_invalid', `内容包包含危险路径：${path}`,
+              '请删除绝对路径或包含 .. 的路径后重新提交'));
+            return;
+          }
+          const isDirectory = path.endsWith('/');
+          const madeByUnix = (entry.versionMadeBy >>> 8) === 3;
+          const unixMode = madeByUnix ? entry.externalFileAttributes >>> 16 : 0;
+          const unixType = unixMode & 0o170000;
+          const expectedType = isDirectory ? 0o040000 : 0o100000;
+          if (unixType !== 0 && unixType !== expectedType) {
+            fail(new UnpackError('bundle_invalid', `内容包包含特殊条目：${path}`,
+              '请删除符号链接、设备文件或其他特殊文件后重新提交'));
+            return;
+          }
+          if (!isDirectory && (BANNED_EXT.has(extname(path).toLowerCase()) || (unixMode & 0o111))) {
+            fail(new UnpackError('bundle_invalid', `内容包包含可执行文件：${path}`,
+              '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
+            return;
+          }
+          if (isSensitiveArtifactPath(path)) {
+            rejected.push({ path, reason: '敏感文件不允许上传' });
+            zipfile.readEntry();
+            return;
+          }
+          if (isMetadataPath(path)) {
+            zipfile.readEntry();
+            return;
+          }
+
+          fileCount += 1;
+          if (fileCount > LIMITS.fileCount) {
+            fail(fileCountLimitError());
+            return;
+          }
+          if (!isDirectory && entry.uncompressedSize > LIMITS.singleFileBytes) {
+            fail(fileLimitError(path));
+            return;
+          }
+          totalBytes += entry.uncompressedSize;
+          if (totalBytes > LIMITS.unpackedBytes) {
+            fail(bundleLimitError());
+            return;
+          }
+
+          if (isDirectory) {
+            mkdirSync(join(destDir, path), { recursive: true });
+            zipfile.readEntry();
+            return;
+          }
+
+          const target = join(destDir, path);
+          mkdirSync(dirname(target), { recursive: true });
+          zipfile.openReadStream(entry, (streamError, readStream) => {
+            if (streamError) {
+              fail(streamError);
+              return;
+            }
+            pipeline(readStream, createWriteStream(target))
+              .then(() => zipfile.readEntry(), fail);
+          });
+        } catch (error) {
+          fail(error);
+        }
+      });
+      zipfile.readEntry();
+    });
+  });
 }
 
 /** 递归列出目录下所有文件的相对路径 */

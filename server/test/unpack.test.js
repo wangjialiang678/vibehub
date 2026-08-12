@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { safeExtract, rewriteAbsolutePaths, flattenSingleRoot, UnpackError } from '../src/services/unpack.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'vh-test-'));
@@ -13,6 +14,31 @@ function tarball(buildFn) {
   buildFn(src);
   const out = join(tmp(), 'b.tgz');
   execFileSync('tar', ['-czf', out, '-C', src, '.']);
+  return out;
+}
+
+function tarballWithPath(archivePath) {
+  const tgz = tarball((d) => writeFileSync(join(d, 'payload.txt'), 'x'));
+  const bytes = gunzipSync(readFileSync(tgz));
+  let headerOffset = -1;
+  for (let offset = 0; offset < bytes.length; offset += 512) {
+    const name = bytes.subarray(offset, offset + 100).toString('utf8').replace(/\0.*$/, '');
+    if (name.endsWith('payload.txt')) {
+      headerOffset = offset;
+      break;
+    }
+  }
+  assert.notEqual(headerOffset, -1, 'fixture tar header should be present');
+  bytes.fill(0, headerOffset, headerOffset + 100);
+  bytes.write(archivePath, headerOffset, 'utf8');
+  bytes.fill(0x20, headerOffset + 148, headerOffset + 156);
+  let checksum = 0;
+  for (let i = headerOffset; i < headerOffset + 512; i += 1) checksum += bytes[i];
+  bytes.write(checksum.toString(8).padStart(6, '0'), headerOffset + 148, 6, 'ascii');
+  bytes[headerOffset + 154] = 0;
+  bytes[headerOffset + 155] = 0x20;
+  const out = join(tmp(), 'malicious.tgz');
+  writeFileSync(out, gzipSync(bytes));
   return out;
 }
 
@@ -51,6 +77,14 @@ test('含可执行文件的归档整体无效', async () => {
   const dest = tmp();
   await assert.rejects(
     safeExtract(tgz, dest),
+    (error) => error instanceof UnpackError && error.code === 'bundle_invalid',
+  );
+});
+
+test('tar 路径穿越会让整个归档无效，而不是只跳过危险条目', async () => {
+  const tgz = tarballWithPath('../outside.txt');
+  await assert.rejects(
+    safeExtract(tgz, tmp()),
     (error) => error instanceof UnpackError && error.code === 'bundle_invalid',
   );
 });
