@@ -100,12 +100,15 @@ sudo systemctl is-active vibehub
 
 ## 4. 构建并发布控制台
 
-控制台必须把 API 基址编入产物：
+控制台必须把 API 基址编入产物。Skill 的 npm 包发布并实测可下载后，再同时配置安装命令；发布前不要设置 `VITE_SKILL_INSTALL_COMMAND`，此时 `/install` 会保持“即将开放”状态：
 
 ```bash
 cd web
 npm ci
-VITE_API_BASE=https://hub.supermind-ai.cn npm run build
+VITE_API_BASE=https://hub.supermind-ai.cn \
+VITE_PUBLIC_APP_URL=https://hub.supermind-ai.cn \
+VITE_SKILL_INSTALL_COMMAND='npx -y @supermind/vibehub-skill@latest' \
+npm run build
 rsync -az --delete ./dist/ <deploy-user>@<server>:/tmp/vibehub-console/
 ```
 

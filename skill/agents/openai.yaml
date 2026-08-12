@@ -1,0 +1,4 @@
+interface:
+  display_name: "VibeHub 网页作品部署"
+  short_description: "连接营地并提交、预览和修订网页游戏作品"
+  default_prompt: "Use $vibehub to help me submit this web game to my camp."

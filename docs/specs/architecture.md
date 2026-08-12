@@ -416,12 +416,14 @@ Codex 的独立方案主张 **P0 服务端完全不执行学员的任何 JavaScr
 一个仓库同时满足三家 AI 工具：
 ```
 vibehub-skill/
-├── SKILL.md          # Claude Code 读这个
-├── AGENTS.md         # Codex / WorkBuddy 读这个（内容指向同一套 CLI）
-├── bin/vibehub       # Node 单文件 CLI，零依赖
-└── README.md
+├── SKILL.md          # 三家 Agent 共用的提示词与操作流程
+├── AGENTS.md         # 兼容读取 AGENTS.md 的工具
+├── agents/openai.yaml
+├── bin/install.mjs   # 跨平台安装器
+├── bin/vibehub       # Node CLI，零第三方运行时依赖
+└── lib/platform.mjs  # macOS / Windows 系统命令差异
 ```
-安装：`git clone ... ~/.claude/skills/vibehub`，或直接 clone 进项目目录。
+学生侧安装：macOS 与 Windows 共用 `/install` 页面提供的一条命令。npm 包完成发布并验证可下载后，构建前通过 `VITE_SKILL_INSTALL_COMMAND` 开放复制按钮；未配置时页面明确显示“即将开放”，不会向学生提供失效命令。安装器把同一份 Skill 分别放到 Codex、Claude Code 与 WorkBuddy 的个人 Skill 目录；可用 `--targets` 只安装指定工具，其他兼容 `SKILL.md` 的 Agent 可用 `--dir` 指定完整目录。更新时先在目标同级暂存完整新版本并验证文件，再把原目录移到 `~/.vibehub/skill-backups/` 下的时间戳备份，最后原子换入新目录；失败时恢复原目录并清理暂存目录。备份不留在 Agent 的 Skill 扫描目录里。超脑 SkillHub 作为内部镜像和版本管理入口，不作为 Windows 学生的唯一安装方式。
 
 ### 6.2 握手时序
 
@@ -436,7 +438,7 @@ vibehub-skill/
  │                        │                        │ 未超 max_devices
  │                        │◀── {token, project,   ─┤ 绑定 user↔project
  │                        │     camp, endpoints}   │ code.status=bound
- │                        ├─ 写 ~/.vibehub/credentials.json (0600)
+ │                        ├─ 合并写入 ~/.vibehub/credentials.json
  │◀── "已连接到《AI 产品共创课》，你的作品：城市声音地图"
 ```
 
@@ -445,6 +447,8 @@ vibehub-skill/
 | 命令 | 作用 |
 |---|---|
 | `vibehub bind <邀请码>` | 绑定身份与项目 |
+| `vibehub camps` | 列出已经连接的营地与唯一连接标识 |
+| `vibehub use <连接标识>` | 切换接下来查询、预览和部署所使用的营地/作品 |
 | `vibehub status` | 当前版本 / 审核状态 / 无凭证预览定位地址 / 诊断摘要；不签发或打印 claim |
 | `vibehub deploy [--summary "..."]` | 打包 → 提交 → 显示无凭证预览定位地址；不打印返回体中的 claim |
 | `vibehub open` | 为待审版本换取短期 claim 并直接交给浏览器；终端不回显 claim。无待审版时打开正式作品 |
@@ -455,7 +459,7 @@ vibehub-skill/
 - **不透明随机串，不用 JWT** —— 必须支持即时吊销（老师撤销邀请码 → token 立刻失效）
 - 存 DB：`token_hash`（只存哈希）、`scope{camp_id, project_id, role}`、`device_name`、`last_used_at`、`expires_at`
 - **服务端一切鉴权只认 token 里的 scope**，绝不接受客户端自报的 camp/project 参数（超脑上传平台 ADR-002 的血泪教训）
-- 本地存 `~/.vibehub/credentials.json`，权限 0600
+- 本地存 `~/.vibehub/credentials.json`。一个文件保存多个营地连接和当前连接；macOS/Linux 使用 0600，Windows 依赖用户目录 ACL
 - 邀请码撤销 → 级联吊销该码签发的全部 token
 
 ---

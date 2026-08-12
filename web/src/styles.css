@@ -518,10 +518,38 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .invite-form .button { margin-top: 16px; min-height: 50px; }
 .form-error { margin: 9px 0 0; color: var(--coral-deep); font-size: 12px; line-height: 1.5; }
 .login-help { margin-top: 19px; color: var(--ink-soft); font-size: 12px; }
+.login-help a { display: inline-block; margin-top: 8px; color: var(--blue); font-weight: 650; }
 .login-aside { padding: 52px 58px; display: flex; flex-direction: column; justify-content: end; color: #fff; background: var(--ink); }
 .login-aside > span { width: 47px; height: 47px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.3); border-radius: 50%; color: var(--coral); font: 30px Georgia, serif; }
 .login-aside p { margin-top: 21px; font-size: 20px; font-weight: 700; }
 .login-aside small { margin-top: 7px; color: #c5c0b8; }
+
+/* skill install */
+.install-page { width: min(1080px, calc(100% - 48px)); min-height: 100vh; margin: 0 auto; padding: 26px 0 34px; }
+.install-nav { min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.install-brand { display: inline-flex; align-items: center; gap: 11px; font-size: 15px; }
+.install-hero { max-width: 780px; padding: 74px 0 44px; }
+.install-hero h1 { margin: 18px 0 22px; font: 700 clamp(52px, 8vw, 88px)/.96 Georgia, "Songti SC", serif; letter-spacing: -.07em; }
+.install-hero > p:not(.eyebrow) { max-width: 650px; color: var(--ink-soft); font-size: 16px; line-height: 1.9; }
+.agent-row { margin-top: 25px; display: flex; flex-wrap: wrap; gap: 8px; }
+.agent-row span { padding: 7px 11px; border: 1px solid var(--line); border-radius: 99px; color: var(--ink-soft); background: var(--surface); font-size: 12px; }
+.install-card { padding: 10px; }
+.platform-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+.platform-tabs button { min-width: 104px; padding: 10px 15px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; font-weight: 700; }
+.platform-tabs button.is-active { color: var(--ink); background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--line); }
+.install-command { min-height: 82px; padding: 14px 15px 14px 23px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-radius: 9px; color: #f8f5ef; background: var(--ink); }
+.install-command code { overflow: auto; font: 600 15px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace; white-space: nowrap; }
+.install-command .button { flex: 0 0 auto; }
+.install-terminal-hint { padding: 10px 13px 5px; color: var(--ink-soft); font-size: 12px; }
+.install-terminal-hint code { color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+.install-terminal-hint a { margin-left: 3px; color: var(--coral-deep); font-weight: 650; }
+.install-steps { margin: 52px 0 62px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+.install-steps article { min-height: 220px; padding: 27px 29px; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 17px; }
+.install-steps article + article { border-left: 1px solid var(--line-strong); }
+.install-steps article > span { color: var(--coral); font: italic 19px Georgia, serif; }
+.install-steps h2 { margin-top: 1px; font-size: 18px; letter-spacing: -.02em; }
+.install-steps p { margin-top: 12px; color: var(--ink-soft); font-size: 13px; line-height: 1.75; }
+.install-footer { display: flex; justify-content: space-between; gap: 18px; color: var(--ink-soft); font-size: 12px; }
 
 @media (max-width: 1100px) {
   .dashboard-layout { grid-template-columns: 160px minmax(0, 1fr); }
@@ -572,6 +600,10 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .work-card.is-featured { grid-column: span 2; grid-row: auto; }
   .login-page { grid-template-columns: 1fr; }
   .login-aside { display: none; }
+  .install-hero { padding-top: 50px; }
+  .install-steps { grid-template-columns: 1fr; }
+  .install-steps article { min-height: 150px; }
+  .install-steps article + article { border-top: 1px solid var(--line-strong); border-left: 0; }
 }
 
 @media (max-width: 540px) {
@@ -624,4 +656,10 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .work-card.is-featured .work-thumbnail { height: 235px; }
   .work-card.is-featured .work-copy h3 { font-size: 26px; }
   .collection-footer { align-items: start; flex-direction: column; padding: 25px 0; }
+  .install-page { width: min(100% - 28px, 1080px); }
+  .install-nav .muted-link { display: none; }
+  .install-hero h1 { font-size: 52px; }
+  .install-command { align-items: stretch; flex-direction: column; padding: 19px; }
+  .install-command .button { width: 100%; }
+  .install-footer { align-items: start; flex-direction: column; }
 }

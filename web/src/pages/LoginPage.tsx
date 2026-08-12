@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { api, readableError } from '../lib/api';
 import { postLoginPath } from '../lib/presentation';
 
@@ -34,7 +35,7 @@ export function LoginPage() {
           {redeem.isError && <p className="form-error" role="alert">{readableError(redeem.error, '邀请码没有验证成功，请检查后重试。')}</p>}
           <button className="button button-coral button-wide" type="submit" disabled={!code.trim() || redeem.isPending}>{redeem.isPending ? '正在进入…' : '进入 VibeHub'}</button>
         </form>
-        <p className="login-help">邀请码找不到了？请联系老师重新获取。</p>
+        <p className="login-help">邀请码找不到了？请联系老师重新获取。<br /><Link to="/install">第一次用 AI 提交作品？安装部署助手 →</Link></p>
       </section>
       <aside className="login-aside" aria-hidden="true"><span>V</span><p>VibeHub</p><small>把每个人的想法，vibe 在一起</small></aside>
     </main>

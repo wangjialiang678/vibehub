@@ -3,32 +3,77 @@
  * vibehub —— 把你的作品交给 VibeHub。
  * 零依赖，Node ≥ 20。学员的 AI 工具调用它。
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, chmodSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, chmodSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, relative, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { platformCommands } from '../lib/platform.mjs';
 
 const CRED_DIR = join(homedir(), '.vibehub');
 const CRED = join(CRED_DIR, 'credentials.json');
-const DEFAULT_API = process.env.VIBEHUB_API || 'http://127.0.0.1:4300';
+const DEFAULT_API = process.env.VIBEHUB_API || 'https://hub.supermind-ai.cn';
+const PLATFORM = platformCommands();
+const CLI_DISPLAY = `node "${resolve(process.argv[1])}"`;
 
 const c = { r: '\x1b[31m', g: '\x1b[32m', y: '\x1b[33m', b: '\x1b[34m', d: '\x1b[2m', x: '\x1b[0m', bold: '\x1b[1m' };
 const say = (...a) => console.log(...a);
-const die = (msg, hint) => { console.error(`${c.r}✗${c.x} ${msg}`); if (hint) console.error(`${c.d}  → ${hint}${c.x}`); process.exit(1); };
+class CliError extends Error {
+  constructor(message, hint) {
+    super(message);
+    this.hint = hint;
+  }
+}
+const die = (message, hint) => { throw new CliError(message, hint); };
+const printError = (message, hint) => {
+  console.error(`${c.r}✗${c.x} ${message}`);
+  if (hint) console.error(`${c.d}  → ${hint}${c.x}`);
+};
 
 function loadCred() {
-  if (!existsSync(CRED)) die('还没有连接到 VibeHub。', '运行 vibehub bind <邀请码>');
-  return JSON.parse(readFileSync(CRED, 'utf8'));
-}
-function saveCred(data) {
-  mkdirSync(CRED_DIR, { recursive: true });
-  writeFileSync(CRED, JSON.stringify(data, null, 2));
-  chmodSync(CRED, 0o600);           // 凭证不给别人读
+  if (!existsSync(CRED)) die('还没有连接到 VibeHub。', `运行 ${CLI_DISPLAY} bind <邀请码>`);
+  const store = loadStore();
+  const cred = store.connections[store.active];
+  if (!cred) die('当前营地连接已失效。', `运行 ${CLI_DISPLAY} camps 查看连接，或重新 bind`);
+  return cred;
 }
 
-async function api(path, { method = 'GET', body, token, form } = {}) {
-  const cred = token === false ? null : (token ? { token } : (existsSync(CRED) ? loadCred() : null));
+function connectionKey(cred) {
+  const camp = cred.camp?.slug || cred.camp?.id || 'camp';
+  const project = cred.project?.id || cred.user?.id || 'profile';
+  return `${camp}:${project}`;
+}
+
+function normalizeStore(raw) {
+  if (raw?.version === 2 && raw.connections && typeof raw.connections === 'object' && !Array.isArray(raw.connections)) return raw;
+  if (raw?.token) {
+    const key = connectionKey(raw);
+    return { version: 2, active: key, connections: { [key]: raw } };
+  }
+  die('VibeHub 的本地连接信息损坏了。', '请保留文件并联系老师或技术支持');
+}
+
+function loadStore(required = true) {
+  if (!existsSync(CRED)) {
+    if (!required) return { version: 2, active: null, connections: {} };
+    die('还没有连接到 VibeHub。', `运行 ${CLI_DISPLAY} bind <邀请码>`);
+  }
+  try { return normalizeStore(JSON.parse(readFileSync(CRED, 'utf8'))); }
+  catch (error) {
+    if (error instanceof CliError || error?.code) throw error;
+    die('VibeHub 的本地连接信息无法读取。', '请保留文件并联系老师或技术支持');
+  }
+}
+
+function saveStore(data) {
+  mkdirSync(CRED_DIR, { recursive: true });
+  writeFileSync(CRED, JSON.stringify(data, null, 2), { mode: 0o600 });
+  // Windows 的用户目录使用 ACL；POSIX 系统再收紧为仅本人可读写。
+  if (process.platform !== 'win32') chmodSync(CRED, 0o600);
+}
+
+async function api(path, { method = 'GET', body, token, form, credential } = {}) {
+  const cred = token === false ? null : (credential || (token ? { token } : (existsSync(CRED) ? loadCred() : null)));
   const headers = {};
   if (cred?.token) headers.authorization = `Bearer ${cred.token}`;
   let payload;
@@ -97,7 +142,7 @@ function pickSourceDir(dir) {
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
     if (pkg.scripts?.build) {
       say(`${c.d}检测到构建脚本，先跑一次 npm run build …${c.x}`);
-      try { execFileSync('npm', ['run', 'build'], { cwd: dir, stdio: 'inherit' }); }
+      try { execFileSync(PLATFORM.npm.command, [...PLATFORM.npm.prefix, 'run', 'build'], { cwd: dir, stdio: 'inherit' }); }
       catch { die('构建失败了。', '先在本地把 npm run build 跑通再提交'); }
     }
     for (const d of ['dist', 'build', 'out', 'public']) {
@@ -109,12 +154,22 @@ function pickSourceDir(dir) {
 
 function makeTarball(srcDir) {
   const extra = readIgnoreFile(srcDir);
-  const out = join(tmpdir(), `vibehub_${Date.now()}.tgz`);
+  const testRoot = process.env.NODE_ENV === 'test' ? process.env.VIBEHUB_TEST_TMPDIR : null;
+  const archiveRoot = testRoot ? resolve(testRoot) : tmpdir();
+  mkdirSync(archiveRoot, { recursive: true });
+  const out = join(archiveRoot, `vibehub_${Date.now()}_${process.pid}.tgz`);
   const args = ['-czf', out];
   for (const name of [...IGNORE, ...extra]) args.push('--exclude', name);
   args.push('-C', srcDir, '.');
   // COPYFILE_DISABLE=1：不让 macOS 的 tar 附带 AppleDouble(._xxx) 扩展属性文件
-  execFileSync('tar', args, { stdio: 'pipe', env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  try {
+    execFileSync(PLATFORM.tar, args, { stdio: 'pipe', env: { ...process.env, COPYFILE_DISABLE: '1' } });
+  } catch {
+    rmSync(out, { force: true });
+    die('作品打包失败了。', process.platform === 'win32'
+      ? '请确认使用 Windows 10/11，并在终端运行 tar --version 检查系统打包工具'
+      : '请在终端运行 tar --version 检查系统打包工具');
+  }
   return out;
 }
 
@@ -135,19 +190,53 @@ function countFiles(dir, ignore = IGNORE) {
 // ── 命令 ─────────────────────────────────────────────────────────────
 const cmds = {
   async bind(code) {
-    if (!code) die('请提供邀请码。', '用法：vibehub bind <邀请码>');
+    if (!code) die('请提供邀请码。', `用法：${CLI_DISPLAY} bind <邀请码>`);
+    // 先确认旧连接可读，避免服务端已签发 token 后才发现本地无法保存。
+    const store = loadStore(false);
     const api_base = process.env.VIBEHUB_API || DEFAULT_API;
     const res = await fetch(api_base + '/api/skill/bind', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, device_name: `${basename(homedir())} · ${process.env.TERM_PROGRAM || 'CLI'}` }),
+      body: JSON.stringify({ code, device_name: `${basename(homedir())} · ${process.env.TERM_PROGRAM || process.env.COMPUTERNAME || 'CLI'}` }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) die(data.error?.message || '绑定失败', data.error?.hint);
-    saveCred({ token: data.token, api: api_base, camp: data.camp, project: data.project, user: data.user });
+    const cred = { token: data.token, api: api_base, camp: data.camp, project: data.project, user: data.user };
+    const key = connectionKey(cred);
+    store.version = 2;
+    store.connections[key] = cred;
+    store.active = key;
+    saveStore(store);
     say(`${c.g}✓${c.x} ${data.message}`);
     say(`${c.d}凭证已保存到 ${CRED}${c.x}`);
-    say(`\n下一步：写好你的网页，然后运行 ${c.bold}vibehub deploy${c.x}`);
+    say(`\n下一步：写好你的网页，然后运行 ${c.bold}${CLI_DISPLAY} deploy${c.x}`);
+  },
+
+  camps() {
+    const store = loadStore();
+    say(`\n${c.bold}已经连接的营地${c.x}`);
+    for (const [key, cred] of Object.entries(store.connections)) {
+      const current = key === store.active ? `  ${c.g}当前${c.x}` : '';
+      const project = cred.project?.title ? ` · ${cred.project.title}` : '';
+      say(`  ${cred.camp?.name || key}${project}${current}`);
+      say(`    ${c.d}连接标识 ${key}${c.x}`);
+    }
+    say('');
+  },
+
+  use(query) {
+    if (!query) die('请告诉我要切换到哪个营地。', `先运行 ${CLI_DISPLAY} camps 查看营地列表`);
+    const store = loadStore();
+    const wanted = String(query).trim().toLowerCase();
+    const matches = Object.entries(store.connections).filter(([key, cred]) =>
+      key.toLowerCase() === wanted
+      || String(cred.camp?.slug || '').toLowerCase() === wanted
+      || String(cred.camp?.name || '').toLowerCase() === wanted);
+    if (!matches.length) die(`没有找到“${query}”。`, `运行 ${CLI_DISPLAY} camps 查看可切换的营地`);
+    if (matches.length > 1) die(`“${query}”对应多个连接。`, `请使用 ${CLI_DISPLAY} camps 显示的完整连接标识`);
+    store.active = matches[0][0];
+    saveStore(store);
+    say(`${c.g}✓${c.x} 已切换到《${matches[0][1].camp?.name || query}》`);
   },
 
   async status() {
@@ -161,7 +250,7 @@ const cmds = {
     if (s.live_version) say(`线上版本  ${c.g}${s.live_version.label}${c.x}   ${p.live_url || ''}`);
     if (s.pending_version) {
       say(`待审版本  ${c.y}${s.pending_version.label}${c.x}   ${pendingPreviewUrl}`);
-      say(`          ${c.d}运行 vibehub open 可安全打开预览${c.x}`);
+      say(`          ${c.d}运行 ${CLI_DISPLAY} open 可安全打开预览${c.x}`);
       say(`          ${c.d}审核通过后才会替换线上版本${c.x}`);
     }
     const d = s.latest_diagnosis;
@@ -169,7 +258,7 @@ const cmds = {
       // failed = 诊断本身没跑完，但版本已经提交、进了老师的审核队列（服务端仍会建 review）。
       // 别说「重新 deploy 就会重新诊断」——相同内容会被判重、直接跳过，不会重新入队。
       say(`\n${c.y}这次诊断没跑完${c.x}，不过你的版本已经提交，老师可以直接审核。`);
-      say(`${c.d}想重新诊断的话，改一点内容再 ${c.x}${c.bold}vibehub deploy${c.x}${c.d} 就会重新跑。${c.x}`);
+      say(`${c.d}想重新诊断的话，改一点内容再 ${c.x}${c.bold}${CLI_DISPLAY} deploy${c.x}${c.d} 就会重新跑。${c.x}`);
     } else if (d) {
       const completeness = d.status === 'running'
         ? null
@@ -179,7 +268,7 @@ const cmds = {
         say(`\n开发完成度  ${c.bold}${completeness}%${c.x}  ${c.d}(${d.applicable_earned}/${d.applicable_max} 分，只算适用项)${c.x}`);
         say(`          验证覆盖率 ${coverage}`);
       } else {
-        say(`\n${c.d}诊断正在进行，稍后用 vibehub status 查看${c.x}`);
+        say(`\n${c.d}诊断正在进行，稍后用 ${CLI_DISPLAY} status 查看${c.x}`);
       }
       if (d.stale) say(`          ${c.y}诊断更新中，以上是上一版本结果${c.x}`);
       if (d.blocked || d.status === 'blocked') say(`          ${c.r}有阻塞问题，先修好再提交审核${c.x}`);
@@ -219,34 +308,38 @@ const cmds = {
 
     say(`${c.d}打包 ${relative(process.cwd(), src) || '.'} …${c.x}`);
     const tgz = makeTarball(src);
-    const size = statSync(tgz).size;
-    const sha = createHash('sha256').update(readFileSync(tgz)).digest('hex');
-    say(`${c.d}${countFiles(src)} 个文件，${(size / 1024).toFixed(0)} KB${c.x}`);
+    try {
+      const size = statSync(tgz).size;
+      const sha = createHash('sha256').update(readFileSync(tgz)).digest('hex');
+      say(`${c.d}${countFiles(src)} 个文件，${(size / 1024).toFixed(0)} KB${c.x}`);
 
-    const pre = await api('/api/skill/versions/preflight', { method: 'POST', body: { sha256: sha, size } });
-    if (pre.duplicate) { say(`${c.y}○${c.x} ${pre.message}`); return; }
+      const pre = await api('/api/skill/versions/preflight', { method: 'POST', body: { sha256: sha, size }, credential: cred });
+      if (pre.duplicate) { say(`${c.y}○${c.x} ${pre.message}`); return; }
 
-    const fd = new FormData();
-    fd.append('meta', JSON.stringify({ label, summary, flows }));
-    fd.append('bundle', new Blob([readFileSync(tgz)]), 'bundle.tgz');
-    const res = await fetch(cred.api + '/api/skill/versions', {
-      method: 'POST', headers: { authorization: `Bearer ${cred.token}` }, body: fd,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) die(data.error?.message || '提交失败', data.error?.hint);
+      const fd = new FormData();
+      fd.append('meta', JSON.stringify({ label, summary, flows }));
+      fd.append('bundle', new Blob([readFileSync(tgz)]), 'bundle.tgz');
+      const res = await fetch(cred.api + '/api/skill/versions', {
+        method: 'POST', headers: { authorization: `Bearer ${cred.token}` }, body: fd,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) die(data.error?.message || '提交失败', data.error?.hint);
 
-    say(`\n${c.g}✓${c.x} ${data.label} 已提交`);
-    say(`  预览  ${c.b}${cleanPreviewUrl(data.preview_url)}${c.x}`);
-    say(`  ${c.d}安全预览已准备，可运行 vibehub open 打开${c.x}`);
-    if (data.rewrites) say(`  ${c.d}自动修正了 ${data.rewrites} 处绝对路径引用（作品跑在子目录下）${c.x}`);
-    if (Number.isFinite(data.diagnosis?.score)) {
-      const conclusion = data.diagnosis.summary ? ` — ${data.diagnosis.summary}` : '';
-      say(`  完成度 ${c.bold}${data.diagnosis.score}%${c.x}${conclusion}`);
-      (data.diagnosis.next_steps || []).forEach((n) => say(`    ${c.d}·${c.x} ${n}`));
-    } else {
-      say(`  ${c.d}正在做诊断，稍后用 vibehub status 查看${c.x}`);
+      say(`\n${c.g}✓${c.x} ${data.label} 已提交`);
+      say(`  预览  ${c.b}${cleanPreviewUrl(data.preview_url)}${c.x}`);
+      say(`  ${c.d}安全预览已准备，可运行 ${CLI_DISPLAY} open 打开${c.x}`);
+      if (data.rewrites) say(`  ${c.d}自动修正了 ${data.rewrites} 处绝对路径引用（作品跑在子目录下）${c.x}`);
+      if (Number.isFinite(data.diagnosis?.score)) {
+        const conclusion = data.diagnosis.summary ? ` — ${data.diagnosis.summary}` : '';
+        say(`  完成度 ${c.bold}${data.diagnosis.score}%${c.x}${conclusion}`);
+        (data.diagnosis.next_steps || []).forEach((n) => say(`    ${c.d}·${c.x} ${n}`));
+      } else {
+        say(`  ${c.d}正在做诊断，稍后用 ${CLI_DISPLAY} status 查看${c.x}`);
+      }
+      say(`\n${data.message}`);
+    } finally {
+      rmSync(tgz, { force: true });
     }
-    say(`\n${data.message}`);
   },
 
   async open() {
@@ -254,9 +347,9 @@ const cmds = {
     const s = await api('/api/skill/project');
     const openingPreview = !!s.pending_version?.preview_url;
     const url = openingPreview ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
-    if (!url) die('还没有可打开的版本。', '先运行 vibehub deploy');
+    if (!url) die('还没有可打开的版本。', `先运行 ${CLI_DISPLAY} deploy`);
     try {
-      execFileSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url]);
+      execFileSync(PLATFORM.opener.command, [...PLATFORM.opener.prefix, url]);
     } catch {
       die(openingPreview ? '浏览器没有成功打开安全预览。' : '浏览器没有成功打开正式作品。', '请检查系统默认浏览器后重试');
     }
@@ -277,17 +370,25 @@ const cmds = {
     say(`
 ${c.bold}vibehub${c.x} — 把你的作品交给 VibeHub
 
-  ${c.bold}vibehub bind <邀请码>${c.x}          用邀请码连上平台
-  ${c.bold}vibehub deploy${c.x}                 打包当前目录并提交
+  ${c.bold}${CLI_DISPLAY} bind <邀请码>${c.x}   用邀请码连上平台
+  ${c.bold}${CLI_DISPLAY} camps${c.x}            查看已经连接的营地
+  ${c.bold}${CLI_DISPLAY} use <营地标识>${c.x}   切换当前营地
+  ${c.bold}${CLI_DISPLAY} deploy${c.x}           打包当前目录并提交
       --summary "本次更新说明"
       --flows "上传声音,查看地图"    声明核心操作路径（诊断会用到）
-  ${c.bold}vibehub status${c.x}                 看当前状态与 AI 诊断
-  ${c.bold}vibehub logs${c.x}                   看最近的提交与审核记录
-  ${c.bold}vibehub open${c.x}                   在浏览器打开你的作品
+  ${c.bold}${CLI_DISPLAY} status${c.x}           看当前状态与 AI 诊断
+  ${c.bold}${CLI_DISPLAY} logs${c.x}             看最近的提交与审核记录
+  ${c.bold}${CLI_DISPLAY} open${c.x}             在浏览器打开你的作品
 `);
   },
 };
 
 const [cmd, ...rest] = process.argv.slice(2);
 const fn = cmds[cmd] || cmds.help;
-fn(...rest).catch?.((e) => die(e.message));
+Promise.resolve()
+  .then(() => fn(...rest))
+  .catch((error) => {
+    if (error instanceof CliError) printError(error.message, error.hint);
+    else printError('操作没有完成。', '请检查网络和本地文件后重试；仍有问题请联系老师或技术支持');
+    process.exitCode = 1;
+  });

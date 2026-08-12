@@ -1,94 +1,75 @@
-# VibeHub — 把你的作品变成一个网址
+# VibeHub 网页作品部署
 
-> 这份文件给 Codex / WorkBuddy 等读 AGENTS.md 的工具；Claude Code 读同目录的 SKILL.md，内容一致。
+本文件供读取 `AGENTS.md` 的 Codex、WorkBuddy 等工具使用，与同目录 `SKILL.md` 执行同一套规则。
 
-你在帮学员把他们做的网页发布到 VibeHub 平台。学员大多是零基础，**不要跟他们讲服务器、域名、构建这些词**。
+帮助零基础学员把网页游戏交给任意使用 VibeHub 的营地。Skill 是通用的；营地、身份、作品和权限全部由邀请码决定，不要写死某个城市、课程或老师。
 
-## 前提
+支持 macOS 和 Windows，要求 Node.js 20 或更高版本。解析当前 Skill 所在目录并调用：
 
-`vibehub` 命令在 `<skill目录>/bin/vibehub`（Node ≥ 20，零依赖）。
-建议先做一个别名，后面直接用 `vibehub`：
-
-```bash
-alias vibehub='node <skill目录>/bin/vibehub'
+```text
+node "<skill目录>/bin/vibehub" <命令>
 ```
 
-## 第一次：接入
+不要要求学员配置 alias。
 
-学员手上有一个邀请码（形如 `CAMP-7K3P`，老师发的）。
+## 职责边界
 
-```bash
-vibehub bind CAMP-7K3P
+**AI 负责**判断与沟通：检查项目、理解玩法、推导更新说明和核心流程、解释诊断与老师反馈，以及在获得修改授权后复现、修复和验证作品问题。
+
+**脚本负责**确定性和安全动作：兑换邀请码、保存及切换营地、调用 API、处理凭证、过滤敏感文件、构建、打包、上传、查询状态和打开安全预览。
+
+不要自行猜测 API、拼接上传请求、读取或回显 token，也不要绕过脚本的敏感文件过滤。
+
+## 连接与多营地
+
+用户给出邀请码并明确要求接入时直接执行；没有邀请码时只询问邀请码：
+
+```text
+node "<skill目录>/bin/vibehub" bind <邀请码>
+node "<skill目录>/bin/vibehub" camps
+node "<skill目录>/bin/vibehub" use <连接标识>
 ```
 
-成功后会显示学员属于哪个课程、作品叫什么名字。凭证存在 `~/.vibehub/credentials.json`（权限 0600）。
+绑定后报告服务端返回的真实营地和作品，不能根据邀请码前缀猜测。部署前目标营地不明确时，先列出并让学员选择。
 
-**常见问题**：
-- 「这个邀请码不存在」→ 让学员确认有没有把数字 0 看成字母 O
-- 「已经绑定 3 台设备」→ 找老师撤销旧设备或要新码
-- 「已经被撤销」→ 找老师要新码
+## 部署流程
 
-## 每次：提交作品
+只处理浏览器可运行的网页游戏或静态网站，不处理 Unity、Godot 和应用商店发布。
 
-在学员的网页目录里（有 `index.html` 的那个目录）：
+先检查 `index.html`、`package.json`、构建脚本和游戏主要玩法。若项目已有测试或检查命令，按项目约定验证；不要擅自更换技术栈。不要将密码、密钥和私人信息写进网页。
 
-```bash
-vibehub deploy --summary "本次做了什么" --flows "上传声音,查看地图"
+用户明确说“部署、提交、交作业”即授权创建私密待审版本，不等于公开发布。用户只问“能不能部署”时只检查，不提交。
+
+从项目和对话推导更新说明及核心操作；无法可靠判断时只问一个简短问题：
+
+```text
+node "<skill目录>/bin/vibehub" deploy --summary "本次更新说明" --flows "开始游戏,完成主要目标,重新开始"
 ```
 
-- `--summary`：**一句话说清这次改了什么**，老师审核时会看到，值得认真写
-- `--flows`：这个作品的核心操作是什么（逗号分隔）。填写后老师能据此验证；不填写也会显示「未声明·待人工确认」并计入完成度，所以请如实填写
+脚本自动构建、选择产物、检查首页、过滤敏感内容并上传。完成后告诉学员“已经提交待审，还没有公开上线”。
 
-命令会自动：
-1. 如果项目有 `package.json` 且有 build 脚本 → 先构建，只提交构建产物
-2. 排除 `node_modules`、`.git` 等目录（也可以写 `.vibehubignore`）
-3. 内容和上次完全一样时不重复提交
-4. **自动修正绝对路径引用**（作品跑在子目录下，`/style.css` 这种写法会 404，平台会帮忙改成相对路径并告诉你改了几处）
-5. 生成一个预览地址，并进入老师的审核队列
+## 状态、预览和退回
 
-**提交 ≠ 上线。** 要跟学员说清楚：预览地址是给他自己和老师看的；审核通过后才会有正式网址。
-
-## 查看状态
-
-```bash
-vibehub status     # 当前状态 + AI 诊断 + 下一步建议；只显示无凭证预览定位地址
-vibehub logs       # 最近的提交与审核记录（含老师的退回意见）
-vibehub open       # 有待审版本时打开短期预览，否则打开正式作品
+```text
+node "<skill目录>/bin/vibehub" status
+node "<skill目录>/bin/vibehub" logs
+node "<skill目录>/bin/vibehub" open
 ```
 
-`status` 会显示完成度、验证覆盖率和逐项得分。**跟学员解释时要说清楚**：
-- 标「不适用」的项不算分（比如作品本来就不需要存数据，服务端那项就不适用）
-- 标「需人工确认」的项是平台没法自动验证的，得学员自己走一遍
-- 验证覆盖率说明有多少适用项是平台实际核验过的；其余仍需要人工确认
+- 问是否上线时先运行 `status`，不要猜。
+- 问退回原因时先运行 `status`，必要时运行 `logs`，不要先索取截图。
+- 区分完成度、验证覆盖率、不适用项和需人工确认项。
+- “看看问题”只诊断；“改好并重新提交”才修改、验证和重新部署。
+- 预览只通过 `open` 打开，不传播带临时凭证的地址。
 
-## 学员的作品要存数据怎么办
+## 数据能力
 
-**不要让学员写后端。** 平台在每个作品页自动注入了 `vibehub` 对象，直接用：
+作品需要少量数据或文件上传时，不要另写后端。页面会注入无需 import 和密钥的全局对象：
 
 ```javascript
-await vibehub.save('sounds', { title: '早高峰的路口', lat: 31.2 });  // 存一条
-const items = await vibehub.list('sounds', { limit: 20 });          // 读列表
-const url = await vibehub.upload(file);                              // 传文件，返回可用地址
-const n = await vibehub.counter('visits');                           // 计数器 +1
-
-vibehub.storage.set('draft', {...});    // 本地存储（自动按作品命名空间隔离）
-vibehub.storage.get('draft');
+await vibehub.save('scores', { player: '小明', score: 120 });
+const scores = await vibehub.list('scores', { limit: 20 });
+const url = await vibehub.upload(file);
+const visits = await vibehub.counter('visits');
+vibehub.storage.set('draft', { level: 2 });
 ```
-
-不需要 import，不需要 key，不需要配置。写完 `vibehub deploy` 就能用。
-
-**注意**：作品是公开网页，任何人都能看源码。**不要往作品里写任何密码、密钥或私人信息。**
-
-## 被退回了怎么办
-
-`vibehub status` 会显示老师的意见。按意见改完，重新 `vibehub deploy` 就行。
-**已经上线的旧版本不受影响**，访客看到的还是那个能用的版本。
-
-预览只给项目本人和本课程老师使用；请用 `vibehub open` 安全打开，不要把浏览器最初收到的临时地址当正式网址转发。命令行不会打印临时 claim；版本被退回、被新提交替代、审核发布、邀请码撤销或成员身份移除后，旧预览会立即失效。
-
-## 你（AI）该注意的
-
-- 学员说「上线了吗」「发布了吗」→ 先跑 `vibehub status`，别猜
-- 学员的作品打不开 → 先看 `status` 的诊断项，`页面引用的文件都在` 那项失败最常见
-- **不要替学员决定要不要提交审核**——`deploy` 就会自动进队列，说清楚就行
-- 部署失败时把错误里的 `hint` 念给学员听，那是写给他看的

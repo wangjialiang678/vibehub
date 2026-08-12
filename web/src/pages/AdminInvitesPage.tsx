@@ -11,8 +11,11 @@ import type { InviteListItem } from '../lib/types';
 type InviteRole = 'student' | 'teacher';
 interface CreateInviteInput { count: number; role: InviteRole; max_devices: number }
 
-export function publicAppBaseUrl(configuredUrl: string | undefined, browserOrigin: string) {
-  return (configuredUrl?.trim() || browserOrigin).replace(/\/$/, '');
+export function publicAppBaseUrl(configuredUrl?: string, browserOrigin?: string) {
+  const baseUrl = configuredUrl?.trim()
+    || browserOrigin?.trim()
+    || (typeof window !== 'undefined' ? window.location.origin : '');
+  return baseUrl.replace(/\/$/, '');
 }
 
 export function buildStudentInviteMessages(codes: string[], campName: string, origin: string) {
@@ -66,7 +69,7 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
   const [revealedCodes, setRevealedCodes] = useState<string[]>([]);
   const [revealedRole, setRevealedRole] = useState<InviteRole | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const appBaseUrl = publicAppBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL, window.location.origin);
+  const appBaseUrl = publicAppBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL);
   const invites = useQuery({ queryKey: ['invites', campId], queryFn: () => api.invites(campId), retry: false });
   const create = useMutation({
     mutationFn: (input: CreateInviteInput) => api.createInvites(campId, input),

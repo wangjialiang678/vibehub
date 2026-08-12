@@ -5,10 +5,11 @@ import { AdminOverviewPage } from './pages/AdminOverviewPage';
 import { AdminProjectsPage } from './pages/AdminProjectsPage';
 import { CollectionPage } from './pages/CollectionPage';
 import { LoginPage } from './pages/LoginPage';
+import { InstallPage } from './pages/InstallPage';
 import { StudentPage } from './pages/StudentPage';
 import { StudentSubmitPage } from './pages/StudentSubmitPage';
 import { StudentVersionsPage } from './pages/StudentVersionsPage';
 
 export function App() {
-  return <Routes><Route path="/app" element={<StudentPage />} /><Route path="/app/submit" element={<StudentSubmitPage />} /><Route path="/app/versions" element={<StudentVersionsPage />} /><Route path="/admin" element={<AdminPage />} /><Route path="/admin/overview" element={<AdminOverviewPage />} /><Route path="/admin/invites" element={<AdminInvitesPage />} /><Route path="/admin/projects" element={<AdminProjectsPage />} /><Route path="/admin/projects/:projectId" element={<AdminProjectsPage />} /><Route path="/c/:campSlug" element={<CollectionPage />} /><Route path="/login" element={<LoginPage />} /><Route path="*" element={<Navigate to="/app" replace />} /></Routes>;
+  return <Routes><Route path="/app" element={<StudentPage />} /><Route path="/app/submit" element={<StudentSubmitPage />} /><Route path="/app/versions" element={<StudentVersionsPage />} /><Route path="/admin" element={<AdminPage />} /><Route path="/admin/overview" element={<AdminOverviewPage />} /><Route path="/admin/invites" element={<AdminInvitesPage />} /><Route path="/admin/projects" element={<AdminProjectsPage />} /><Route path="/admin/projects/:projectId" element={<AdminProjectsPage />} /><Route path="/c/:campSlug" element={<CollectionPage />} /><Route path="/install" element={<InstallPage />} /><Route path="/login" element={<LoginPage />} /><Route path="*" element={<Navigate to="/app" replace />} /></Routes>;
 }

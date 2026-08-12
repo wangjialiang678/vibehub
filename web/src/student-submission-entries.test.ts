@@ -106,6 +106,11 @@ describe('学员邀请码转发说明', () => {
     expect(publicAppBaseUrl(undefined, 'https://localhost:5173/')).toBe('https://localhost:5173');
   });
 
+  it('有公开构建地址时不依赖 window，无浏览器环境也安全', () => {
+    expect(publicAppBaseUrl(' https://hub.example.test/ ')).toBe('https://hub.example.test');
+    expect(publicAppBaseUrl(undefined)).toBe('');
+  });
+
   it('student 显示每码独立复制按钮，teacher 不显示学员说明', () => {
     const student = render(createElement(RevealedInviteActions, { role: 'student', codes, campName: '暑期创造营', origin, onCopy: vi.fn(), onExport: vi.fn() }));
     const teacher = render(createElement(RevealedInviteActions, { role: 'teacher', codes, campName: '暑期创造营', origin, onCopy: vi.fn(), onExport: vi.fn() }));
