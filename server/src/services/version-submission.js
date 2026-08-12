@@ -6,7 +6,7 @@ import { paths, previewUrl, worksPath } from '../lib/config.js';
 import { flattenSingleRoot, injectSdk, rewriteAbsolutePaths, sha256File, UnpackError } from './unpack.js';
 import { normalizeUpload, UploadFormatError } from './archive-input.js';
 import { makePreview, previewLink, versionDir } from './publish.js';
-import { runDiagnosis, scanArtifactSecrets } from './diagnosis.js';
+import { createRunningDiagnosis, runDiagnosis, scanArtifactSecrets } from './diagnosis.js';
 import { assertProjectedQuota, ProjectQuotaError, pruneProjectArtifacts } from './storage.js';
 import { createPreviewGrant } from './preview-access.js';
 
@@ -138,6 +138,7 @@ export async function submitVersion({
   let project = null;
   let previewId = null;
   let pendingReviewIds = [];
+  let previewGrant = null;
 
   try {
     if (!allowedSubmissionSources.has(submittedVia)) {
@@ -232,17 +233,27 @@ export async function submitVersion({
 
     pendingReviewIds = db.prepare(`SELECT id FROM reviews WHERE project_id=? AND status='pending'`).all(projectId)
       .map((row) => row.id);
-    db.prepare(`UPDATE reviews SET status='superseded' WHERE project_id=? AND status='pending'`).run(projectId);
-    db.prepare(`UPDATE projects SET pending_version_id=?, dev_status='submittable',
-                publish_status=CASE WHEN live_version_id IS NULL THEN publish_status ELSE 'published_with_pending' END,
-                updated_at=? WHERE id=?`).run(vid, now(), projectId);
-    // 先确认可以安全签发 owner 专属预览，再创建不可取消的后台诊断任务。
-    // 若后续入队失败，这份 claim 会随项目状态回滚立即失效。
-    const previewGrant = createPreviewGrant(previewId, auth);
-    if (!previewGrant) {
-      throw new SubmissionError('preview_unavailable', '预览授权创建失败，请重新提交。', 500);
+    let diagnosisId;
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`UPDATE reviews SET status='superseded' WHERE project_id=? AND status='pending'`).run(projectId);
+      db.prepare(`UPDATE projects SET pending_version_id=?, dev_status='submittable',
+                  publish_status=CASE WHEN live_version_id IS NULL THEN publish_status ELSE 'published_with_pending' END,
+                  updated_at=? WHERE id=?`).run(vid, now(), projectId);
+      // pending 切换、预览授权验证和可恢复的 running 诊断必须作为一个持久化提交点。
+      // 进程若在随后入内存队列前退出，启动恢复会继续这条诊断。
+      previewGrant = createPreviewGrant(previewId, auth);
+      if (!previewGrant) {
+        throw new SubmissionError('preview_unavailable', '预览授权创建失败，请重新提交。', 500);
+      }
+      diagnosisId = createRunningDiagnosis({ versionId: vid });
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* BEGIN 失败时没有事务可回滚 */ }
+      throw error;
     }
     const queued = diagnosisQueue.enqueue({
+      diagnosisId,
       versionId: vid,
       projectId,
       campId: project.camp_id,

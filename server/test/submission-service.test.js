@@ -70,7 +70,7 @@ function fixture() {
   const diagnosisQueue = {
     enqueue(task) {
       enqueued.push(task);
-      return { queued: true, diagnosisId: `d_queued_${sequence}_${enqueued.length}` };
+      return { queued: true, diagnosisId: task.diagnosisId };
     },
   };
   return { campId, userId, projectId, auth, diagnosisQueue, enqueued, token };
@@ -259,6 +259,60 @@ test('诊断入队失败会恢复旧 pending 并清除新版本的数据库和�
   assert.equal(existsSync(upload.source), false);
 });
 
+test('提交状态切换前先持久化 running 诊断，进程中断后启动恢复继续诊断并进入审核', async () => {
+  const f = fixture();
+  const upload = htmlSource('<main>这是进程中断后仍应继续诊断的完整作品。</main>');
+  const interruptedQueue = {
+    enqueue(task) {
+      const persisted = db.prepare(`SELECT id,status FROM diagnoses WHERE version_id=? ORDER BY created_at DESC LIMIT 1`)
+        .get(task.versionId);
+      assert.equal(persisted?.status, 'running');
+      assert.equal(task.diagnosisId, persisted.id);
+      throw new Error('simulated process exit after durable finalization');
+    },
+  };
+
+  await assert.rejects(
+    submitVersion({
+      projectId: f.projectId, userId: f.userId, auth: f.auth,
+      source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: interruptedQueue,
+    }),
+    (error) => error instanceof SubmissionError && error.status === 500,
+  );
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM diagnoses').get().n, 0,
+    '普通 enqueue 失败仍应完整回滚，不能留下半提交状态');
+
+  const persistedQueue = {
+    enqueue(task) {
+      const diagnosisId = db.prepare(`SELECT id FROM diagnoses WHERE version_id=? AND status='running'`).get(task.versionId)?.id;
+      assert.ok(diagnosisId);
+      return { queued: true, diagnosisId };
+    },
+  };
+  const secondUpload = htmlSource('<main>这是持久化后模拟进程退出的新提交，网页包含足够完整的可见内容，可以在服务重启后继续诊断并进入老师审核队列。</main>');
+  const result = await submitVersion({
+    projectId: f.projectId, userId: f.userId, auth: f.auth,
+    source: secondUpload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: persistedQueue,
+  });
+  const durable = db.prepare('SELECT id,status FROM diagnoses WHERE version_id=?').get(result.version_id);
+  assert.equal(durable.status, 'running');
+
+  const restarted = await buildApp({ probePreview: async () => ({ status: 'ok', entry_status: 200, resource_failures: [] }) });
+  await restarted.listen({ port: 0, host: '127.0.0.1' });
+  try {
+    for (let i = 0; i < 80 && db.prepare('SELECT status FROM diagnoses WHERE id=?').get(durable.id)?.status === 'running'; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.notEqual(db.prepare('SELECT status FROM diagnoses WHERE id=?').get(durable.id)?.status, 'running');
+    for (let i = 0; i < 80 && !db.prepare('SELECT id FROM reviews WHERE version_id=?').get(result.version_id); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(db.prepare('SELECT status FROM reviews WHERE version_id=?').get(result.version_id)?.status, 'pending');
+  } finally {
+    await restarted.close();
+  }
+});
+
 test('产物清理 COMMIT 部分失败不影响提交，失败项恢复且后续项继续清理', async () => {
   const f = fixture();
   const first = await submit(f);
@@ -277,8 +331,10 @@ test('产物清理 COMMIT 部分失败不影响提交，失败项恢复且后续
   };
   const originalExec = db.exec.bind(db);
   let commitFailed = false;
+  let commitCount = 0;
   db.exec = (sql) => {
-    if (!commitFailed && String(sql).trim().toUpperCase() === 'COMMIT') {
+    if (String(sql).trim().toUpperCase() === 'COMMIT') commitCount += 1;
+    if (!commitFailed && commitCount === 2) {
       commitFailed = true;
       throw new Error('forced first prune commit failure');
     }
