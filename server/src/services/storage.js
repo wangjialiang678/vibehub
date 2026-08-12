@@ -53,8 +53,9 @@ export function assertProjectedQuota(projectId, incomingBytes) {
   return { used_bytes: used, quota_bytes: LIMITS.projectDiskBytes };
 }
 
-export function pruneProjectArtifacts(projectId) {
+export function pruneProjectArtifacts(projectId, additionalRetainedIds = []) {
   const retained = retainedVersionIds(projectId);
+  for (const versionId of additionalRetainedIds) if (versionId) retained.add(versionId);
   const versions = db.prepare('SELECT id,preview_id FROM versions WHERE project_id=? AND artifact_pruned=0').all(projectId);
   let pruned = 0;
   for (const version of versions) {

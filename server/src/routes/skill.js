@@ -1,16 +1,12 @@
 import { nanoid } from 'nanoid';
-import { createWriteStream, mkdirSync, rmSync, existsSync, renameSync } from 'node:fs';
+import { createWriteStream, mkdirSync, rmSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { join } from 'node:path';
 import { db, now } from '../lib/db.js';
 import { issueToken, authRequired, countDevices } from '../lib/auth.js';
-import { paths, LIMITS, worksUrl, previewUrl, worksPath } from '../lib/config.js';
-import { safeExtract, flattenSingleRoot, rewriteAbsolutePaths, injectSdk, sha256File, UnpackError } from '../services/unpack.js';
-import { makePreview, versionDir } from '../services/publish.js';
-import { runDiagnosis, scanArtifactSecrets } from '../services/diagnosis.js';
+import { paths, LIMITS } from '../lib/config.js';
 import { projectSnapshot } from './_shared.js';
-import { assertProjectedQuota, ProjectQuotaError, pruneProjectArtifacts } from '../services/storage.js';
-import { createPreviewGrant } from '../services/preview-access.js';
+import { findActiveDuplicateVersion, SubmissionError, submitVersion } from '../services/version-submission.js';
 
 const err = (reply, code, status, message, hint) =>
   reply.code(status).send({ error: { code, message, hint } });
@@ -77,8 +73,7 @@ export default async function skillRoutes(app, { diagnosisQueue }) {
   // ── 预检：内容没变就别重复上传 ────────────────────────────────────
   app.post('/api/skill/versions/preflight', { preHandler: authRequired() }, async (req) => {
     const { sha256 } = req.body || {};
-    const dup = db.prepare('SELECT id,label FROM versions WHERE project_id=? AND bundle_sha=? ORDER BY seq DESC LIMIT 1')
-      .get(req.auth.project_id, sha256);
+    const dup = findActiveDuplicateVersion(req.auth.project_id, sha256);
     return dup
       ? { duplicate: true, version_id: dup.id, message: `内容和 ${dup.label} 完全一样，没有需要提交的改动。` }
       : { duplicate: false };
@@ -89,125 +84,52 @@ export default async function skillRoutes(app, { diagnosisQueue }) {
     const projectId = req.auth.project_id;
     if (!projectId) return err(reply, 'no_project', 404, '这个身份没有绑定项目。');
 
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId);
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(project.owner_user_id);
-
     let meta = {};
     let tmpFile = null;
+    let filename = null;
+    let delegated = false;
     mkdirSync(paths.tmp, { recursive: true });
 
-    for await (const part of req.parts()) {
-      if (part.type === 'file' && part.fieldname === 'bundle') {
-        tmpFile = join(paths.tmp, `up_${nanoid(10)}.tgz`);
-        await pipeline(part.file, createWriteStream(tmpFile));
-        if (part.file.truncated) {
-          rmSync(tmpFile, { force: true });
-          return err(reply, 'bundle_too_large', 413,
-            `上传包超过 ${Math.round(LIMITS.bundleBytes / 1024 / 1024)} MB。`,
-            '大图片、音频请用平台的文件上传接口，不要打进网页包');
-        }
-      } else if (part.type === 'field' && part.fieldname === 'meta') {
-        try { meta = JSON.parse(part.value); } catch { meta = {}; }
-      }
-    }
-    if (!tmpFile) return err(reply, 'missing_bundle', 400, '没有收到上传的内容包。');
-
-    const vid = 'v_' + nanoid(12);
-    const dir = versionDir(vid);
-    const staging = join(paths.tmp, `stage_${vid}`);
-
     try {
-      const sha = sha256File(tmpFile);
-      const { totalBytes, fileCount, rejected } = await safeExtract(tmpFile, staging);
-      flattenSingleRoot(staging);
-
-      if (!existsSync(join(staging, 'index.html'))) {
-        rmSync(staging, { recursive: true, force: true });
-        return err(reply, 'missing_index_html', 400,
-          '没找到 index.html，你的网页需要有一个首页文件。',
-          '确认打包的是网页目录；如果用了构建工具，先 build 再提交');
+      for await (const part of req.parts()) {
+        if (part.type === 'file' && part.fieldname === 'bundle') {
+          if (tmpFile) {
+            part.file.resume();
+            throw new SubmissionError('multiple_bundles', '一次只能提交一个内容包。', 400);
+          }
+          tmpFile = join(paths.tmp, `up_${nanoid(10)}.upload`);
+          filename = part.filename;
+          await pipeline(part.file, createWriteStream(tmpFile));
+          if (part.file.truncated) {
+            return err(reply, 'bundle_too_large', 413,
+              `上传包超过 ${Math.round(LIMITS.bundleBytes / 1024 / 1024)} MB。`,
+              '大图片、音频请用平台的文件上传接口，不要打进网页包');
+          }
+        } else if (part.type === 'field' && part.fieldname === 'meta') {
+          try { meta = JSON.parse(part.value); } catch { meta = {}; }
+        }
       }
+      if (!tmpFile) return err(reply, 'missing_bundle', 400, '没有收到上传的内容包。');
 
-      // 新提交会替换旧待审产物，按最终保留集合预估而非把历史快照都算进去。
-      assertProjectedQuota(projectId, totalBytes);
-
-      const seq = (db.prepare('SELECT COALESCE(MAX(seq),0) AS m FROM versions WHERE project_id=?').get(projectId).m) + 1;
-      const label = meta.label || `v0.${seq}.0`;
-      const previewId = nanoid(16).toLowerCase().replace(/[^a-z0-9]/g, 'x');
-
-      // 决策 2 是路径式网址 → 作品跑在子目录，必须处理绝对路径
-      const rewrites = rewriteAbsolutePaths(staging, worksPath(user.username, project.slug));
-      injectSdk(staging, '/vibehub/_sdk/vibehub.js');
-
-      mkdirSync(paths.versions, { recursive: true });
-      renameSync(staging, dir);
-
-      db.prepare(`INSERT INTO versions
-        (id,project_id,label,seq,summary,flows,bundle_sha,bundle_size,file_count,rewrites,rejected,preview_id,submitted_by,submitted_via,submitted_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-        .run(vid, projectId, label, seq, meta.summary ?? null,
-          JSON.stringify(meta.flows || []), sha, totalBytes, fileCount,
-          JSON.stringify(rewrites.slice(0, 50)), JSON.stringify(rejected.slice(0, 50)), previewId, req.auth.user_id, 'skill', now());
-
-      // 任何明文密钥都不能先暴露在预览地址，再异步等诊断来发现。
-      // 同步扫描完整产物；诊断记录仍会保留，供学员看到明确的修复原因。
-      const secretFindings = scanArtifactSecrets(dir, { rejected });
-      if (secretFindings.length) {
-        runDiagnosis({ versionId: vid, projectId, versionDir: dir, flows: meta.flows || [], previewProbe: null });
-        db.prepare(`UPDATE reviews SET status='superseded' WHERE project_id=? AND status='pending'`).run(projectId);
-        db.prepare(`UPDATE projects SET pending_version_id=NULL, dev_status='needs_revision',
-                    publish_status=CASE WHEN live_version_id IS NULL THEN 'unpublished' ELSE 'published' END,
-                    updated_at=? WHERE id=?`).run(now(), projectId);
-        rmSync(dir, { recursive: true, force: true });
-        db.prepare('UPDATE versions SET artifact_pruned=1 WHERE id=?').run(vid);
-        return err(reply, 'secret_detected', 422,
-          '你的作品里包含了不该公开的密钥文件，请删除后重新提交',
-          '检查 .env、密钥文件和代码中的 sk-、AKIA、PRIVATE KEY 后重新部署');
-      }
-
-      makePreview({ previewId, versionId: vid });
-      const depId = 'dp_' + nanoid(10);
-      db.prepare(`INSERT INTO deployments (id,version_id,target,status,url,started_at,finished_at)
-                  VALUES (?,?,?,?,?,?,?)`)
-        .run(depId, vid, 'preview', 'ready', previewUrl(previewId), now(), now());
-
-      // 先让旧审核退出队列；新审核必须等异步诊断结束再创建。
-      db.prepare(`UPDATE reviews SET status='superseded' WHERE project_id=? AND status='pending'`).run(projectId);
-      db.prepare(`UPDATE projects SET pending_version_id=?, dev_status='submittable',
-                  publish_status = CASE WHEN live_version_id IS NULL THEN publish_status ELSE 'published_with_pending' END,
-                  updated_at=? WHERE id=?`).run(vid, now(), projectId);
-      pruneProjectArtifacts(projectId);
-
-      const queued = diagnosisQueue.enqueue({
-        versionId: vid, projectId, campId: project.camp_id, versionDir: dir,
-        previewUrl: () => createPreviewGrant(previewId, req.auth)?.preview_url, flows: meta.flows || [],
+      delegated = true;
+      const result = await submitVersion({
+        projectId,
+        userId: req.auth.user_id,
+        auth: req.auth,
+        source: tmpFile,
+        filename,
+        meta,
+        submittedVia: 'skill',
+        diagnosisQueue,
       });
-      const previewGrant = createPreviewGrant(previewId, req.auth);
-      if (!previewGrant) throw new Error('preview grant unavailable after submission');
-
-      return reply.code(201).send({
-        version_id: vid, seq, label,
-        preview_url: previewGrant.preview_url,
-        preview_expires_at: previewGrant.expires_at,
-        rewrites: rewrites.length,
-        deployment: { status: 'ready' },
-        diagnosis: { id: queued.diagnosisId, status: 'running' },
-        review: { status: 'waiting_for_diagnosis' },
-        message: '已生成预览版本，正在做诊断；完成后会自动进入老师的审核队列。审核通过后才会替换线上版本。',
-      });
+      return reply.code(201).send(result);
     } catch (e) {
-      rmSync(staging, { recursive: true, force: true });
-      rmSync(dir, { recursive: true, force: true });
-      if (e instanceof UnpackError) return err(reply, e.code, 400, e.message, e.hint);
-      if (e instanceof ProjectQuotaError) {
-        return err(reply, 'project_disk_quota_exceeded', 413,
-          '这个项目的磁盘空间快用完了，暂时不能再提交这么大的版本。',
-          '删除或压缩大图片、音频和视频后再试；大文件请改用平台文件上传');
-      }
+      if (e instanceof SubmissionError) return err(reply, e.code, e.status, e.message, e.hint);
       req.log.error({ e }, 'submit failed');
       return err(reply, 'bundle_invalid', 400, '这个内容包没法解开，可能损坏了。', '重新运行一次 vibehub deploy');
     } finally {
-      if (tmpFile) rmSync(tmpFile, { force: true });
+      // 委托后由共享服务统一清理；multipart 解析中断时由路由收尾。
+      if (!delegated && tmpFile) rmSync(tmpFile, { force: true });
     }
   });
 }
