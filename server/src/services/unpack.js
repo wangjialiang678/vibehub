@@ -1,7 +1,7 @@
 import * as tar from 'tar';
 import yauzl from 'yauzl';
 import { createHash } from 'node:crypto';
-import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, existsSync, createWriteStream } from 'node:fs';
+import { mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, statSync, renameSync, existsSync, createReadStream, createWriteStream } from 'node:fs';
 import { join, relative, extname, dirname } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { LIMITS } from '../lib/config.js';
@@ -62,31 +62,27 @@ export function isSensitiveArtifactPath(path) {
  * 安全解包学员上传的 tar.gz。
  * 学员产物是 AI 生成的不可信输入——这里的每一条检查都不能省。
  */
-export async function safeExtract(tgzPath, destDir) {
+export async function safeExtract(tgzPath, destDir, { source = null } = {}) {
   mkdirSync(destDir, { recursive: true });
   let totalBytes = 0;
   let fileCount = 0;
   const rejected = [];
-  let dangerousEntry = null;
-  let limitError = null;
-
-  await tar.x({
-    file: tgzPath,
-    cwd: destDir,
-    strip: 0,
+  let validation;
+  const rejectArchive = (error) => {
+    validation.abort(error);
+    return false;
+  };
+  validation = tar.t({
     maxDecompressionRatio: 100,
-    // node-tar 默认就会剥掉绝对路径与 ..，这里再显式拦一道并记录
-    preservePaths: false,
     filter: (path, entry) => {
-      if (limitError) return false;
-      // 链接、设备和可执行项是危险内容：不能只跳过后让整包继续成功。
+      // 校验与落盘分成两遍：任何硬限制都先中止底层解压流，不留异步写盘任务。
       if (entry.type !== 'File' && entry.type !== 'Directory') {
-        dangerousEntry ||= { path, kind: '特殊条目' };
-        return false;
+        return rejectArchive(new UnpackError('bundle_invalid', `内容包包含特殊条目：${path}`,
+          '请删除符号链接、设备文件或其他特殊文件后重新提交'));
       }
       if (hasDangerousPath(path)) {
-        dangerousEntry ||= { path, kind: '危险路径' };
-        return false;
+        return rejectArchive(new UnpackError('bundle_invalid', `内容包包含危险路径：${path}`,
+          '请删除绝对路径或包含 .. 的路径后重新提交'));
       }
       // macOS 的 tar 会给每个文件附带一份 AppleDouble（`._xxx`）存扩展属性，
       // 还有 .DS_Store 和 __MACOSX/。这些对网页毫无意义，会污染文件数统计。
@@ -99,46 +95,64 @@ export async function safeExtract(tgzPath, destDir) {
       // node_modules 是体积噪音；.git 已在敏感文件检查中记录为 rejected。
       if (/(^|\/)node_modules(\/|$)/.test(path)) return false;
       if (entry.type === 'File' && (BANNED_EXT.has(extname(path).toLowerCase()) || (Number(entry.mode) & 0o111))) {
-        dangerousEntry ||= { path, kind: '可执行文件' };
-        return false;
+        return rejectArchive(new UnpackError('bundle_invalid', `内容包包含可执行文件：${path}`,
+          '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
       }
 
       // 目录也会耗尽 inode 与解包时间；上限按所有实际接收条目计数。
       fileCount += 1;
       if (fileCount > LIMITS.fileCount) {
-        limitError = new UnpackError('too_many_files', `文件数超过 ${LIMITS.fileCount} 个上限`,
-          '检查一下是不是把 node_modules 之类的目录打进去了');
-        return false;
+        return rejectArchive(fileCountLimitError());
       }
 
       if (entry.type === 'File') {
         if (entry.size > LIMITS.singleFileBytes) {
-          limitError = new UnpackError('file_too_large',
-            `文件 ${path} 超过 ${Math.round(LIMITS.singleFileBytes / 1024 / 1024)} MB 的单文件上限`,
-            '大的图片、音频、视频建议用平台的文件上传接口，不要打进网页包里');
-          return false;
+          return rejectArchive(fileLimitError(path));
         }
         totalBytes += entry.size;
         if (totalBytes > LIMITS.unpackedBytes) {
-          limitError = new UnpackError('bundle_too_large', '解压后的内容太大了',
-            '把大文件挪出网页目录，或用平台的文件上传接口');
-          return false;
+          return rejectArchive(bundleLimitError());
         }
       }
       return true;
     },
   });
+  try {
+    const input = source || createReadStream(tgzPath);
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        input.unpipe(validation);
+        if (error) {
+          input.destroy();
+          reject(error);
+        } else resolve();
+      };
+      input.once('error', finish);
+      validation.once('error', finish);
+      validation.once('close', () => finish());
+      input.pipe(validation);
+    });
 
-  if (dangerousEntry) {
-    const executable = dangerousEntry.kind === '可执行文件';
-    throw new UnpackError('bundle_invalid', `内容包包含${dangerousEntry.kind}：${dangerousEntry.path}`,
-      executable
-        ? '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'
-        : dangerousEntry.kind === '危险路径'
-          ? '请删除绝对路径或包含 .. 的路径后重新提交'
-          : '请删除符号链接、设备文件或其他特殊文件后重新提交');
+    await tar.x({
+      file: tgzPath,
+      cwd: destDir,
+      strip: 0,
+      maxDecompressionRatio: 100,
+      preservePaths: false,
+      filter: (path) => !isMetadataPath(path) && !isSensitiveArtifactPath(path),
+    });
+  } catch (error) {
+    rmSync(destDir, { recursive: true, force: true });
+    if (error instanceof UnpackError) throw error;
+    if (/max decompression ratio exceeded/i.test(String(error?.message || ''))) {
+      throw new UnpackError('zip_bomb', '压缩包解压缩比例超过 100:1，存在压缩炸弹风险',
+        '请重新打包网页，并避免放入超高压缩比的大文件');
+    }
+    throw error;
   }
-  if (limitError) throw limitError;
 
   return { totalBytes, fileCount, rejected };
 }

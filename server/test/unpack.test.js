@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { createReadStream } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { safeExtract, rewriteAbsolutePaths, flattenSingleRoot, UnpackError } from '../src/services/unpack.js';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'vh-test-'));
@@ -120,6 +122,41 @@ test('空目录也计入 5000 条目上限', async () => {
     safeExtract(tgz, tmp()),
     (error) => error instanceof UnpackError && error.code === 'too_many_files',
   );
+});
+
+test('tar 命中硬限制后立即中止底层输入流并清理 staging', async () => {
+  const tgz = tarball((d) => {
+    writeFileSync(join(d, 'index.html'), 'x');
+    writeFileSync(join(d, 'oversized.dat'), randomBytes(20 * 1024 * 1024 + 1));
+    writeFileSync(join(d, 'must-not-be-consumed.dat'), randomBytes(8 * 1024 * 1024));
+  });
+  const destination = tmp();
+  let bytesRead = 0;
+  const source = createReadStream(tgz, { highWaterMark: 1024 });
+  source.on('data', (chunk) => { bytesRead += chunk.length; });
+
+  await assert.rejects(
+    safeExtract(tgz, destination, { source }),
+    (error) => error instanceof UnpackError && error.code === 'file_too_large',
+  );
+
+  assert.ok(bytesRead > 0, '测试输入流必须真实进入解包器');
+  assert.ok(bytesRead < readFileSync(tgz).length, '命中限制后不应继续消费完整压缩流');
+  assert.equal(existsSync(destination), false, '失败 staging 必须整体清理');
+});
+
+test('tar 超过解压缩比例上限会中止并清理 staging', async () => {
+  const tgz = tarball((d) => {
+    writeFileSync(join(d, 'index.html'), 'x');
+    writeFileSync(join(d, 'highly-compressed.dat'), Buffer.alloc(2 * 1024 * 1024));
+  });
+  const destination = tmp();
+
+  await assert.rejects(
+    safeExtract(tgz, destination),
+    (error) => error instanceof UnpackError && error.code === 'zip_bomb',
+  );
+  assert.equal(existsSync(destination), false, '压缩炸弹失败 staging 必须整体清理');
 });
 
 test('node_modules 不会被解出来', async () => {
