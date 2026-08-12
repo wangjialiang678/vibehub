@@ -16,6 +16,25 @@ export interface Version {
   preview_url?: string | null;
 }
 
+export interface SubmissionMeta {
+  summary?: string;
+  flows?: string[];
+  label?: string;
+}
+
+export interface SubmissionResponse {
+  version_id: string;
+  seq: number;
+  label: string;
+  preview_url: string;
+  preview_expires_at: string;
+  rewrites: number;
+  deployment: { status: string };
+  diagnosis: { id: string; status: string };
+  review: { status: string };
+  message: string;
+}
+
 export interface VersionHistory extends Version {
   artifact_pruned?: boolean;
   review?: { status: string; comment?: string | null; decided_at?: string | null } | null;

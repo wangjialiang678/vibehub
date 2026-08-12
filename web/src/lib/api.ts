@@ -1,4 +1,4 @@
-import type { CampCollection, CampOverview, CampProject, CollectionUpdate, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse, VersionsResponse } from './types';
+import type { CampCollection, CampOverview, CampProject, CollectionUpdate, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse, SubmissionMeta, SubmissionResponse, VersionsResponse } from './types';
 
 // 开发期始终经 Vite 同源代理访问后端，避免 host-only 会话 cookie 在 localhost 与 127.0.0.1 之间丢失。
 // VITE_API_BASE 在开发期只配置代理目标；部署时才作为浏览器实际请求的 API 域名。
@@ -32,6 +32,56 @@ async function requestBlob(path: string): Promise<Blob> {
   return response.blob();
 }
 
+type XhrFactory = () => XMLHttpRequest;
+
+function submissionErrorMessage(xhr: XMLHttpRequest) {
+  try {
+    const data = JSON.parse(xhr.responseText) as { error?: { message?: unknown } };
+    if (typeof data.error?.message === 'string' && data.error.message) return data.error.message;
+  } catch { /* 使用下面的通用提示 */ }
+  return '提交没有完成，请稍后再试。';
+}
+
+export function createSubmitProjectVersion(xhrFactory: XhrFactory) {
+  return (
+    projectId: string,
+    file: File,
+    meta: SubmissionMeta,
+    onProgress: (progress: number) => void,
+  ): Promise<SubmissionResponse> => new Promise((resolve, reject) => {
+    const xhr = xhrFactory();
+    const form = new FormData();
+    form.append('bundle', file);
+    form.append('meta', JSON.stringify(meta));
+
+    xhr.open('POST', `${API_BASE}/api/projects/${encodeURIComponent(projectId)}/versions`);
+    xhr.withCredentials = true;
+    onProgress(0);
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress(Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100))));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as SubmissionResponse);
+          onProgress(100);
+        } catch {
+          reject(new ApiError(xhr.status, '服务器返回的数据无法读取，请刷新页面后再试。'));
+        }
+        return;
+      }
+      reject(new ApiError(xhr.status, submissionErrorMessage(xhr)));
+    };
+    const rejectNetworkError = () => reject(new ApiError(0, '网络连接中断了，请检查网络后重新提交。'));
+    xhr.onerror = rejectNetworkError;
+    xhr.onabort = rejectNetworkError;
+    xhr.send(form);
+  });
+}
+
+export const submitProjectVersion = createSubmitProjectVersion(() => new XMLHttpRequest());
+
 function parseInviteCodes(csv: string, maskedCode: string) {
   const suffix = maskedCode.replace(/^····-/, '');
   const codes = csv.split(/\r?\n/).slice(1).map((line) => /^"([^"]+)"/.exec(line)?.[1]).filter((code): code is string => Boolean(code));
@@ -59,6 +109,7 @@ export const api = {
   revokeInvite: (code: string) => request<{ ok: boolean; revoked_tokens: number; message: string }>(`/api/invites/${encodeURIComponent(code)}/revoke`, { method: 'POST' }),
   collection: (slug: string) => request<CampCollection>(`/api/public/camps/${encodeURIComponent(slug)}`),
   redeem: (code: string) => request<{ role: string; project?: { id: string } | null; user: { display_name: string } }>('/api/session/redeem', { method: 'POST', body: JSON.stringify({ code }) }),
+  submitProjectVersion,
 };
 
 export function readableError(error: unknown, fallback = '暂时无法加载，请稍后再试。'): string {
