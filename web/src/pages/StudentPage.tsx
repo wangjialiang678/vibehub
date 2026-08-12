@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api, readableError } from '../lib/api';
 import { AppShell, ModeTabs } from '../components/Shell';
+import { SubmissionCta } from '../components/SubmissionCta';
 import { LoginRequired, PageState, PreviewFrame, StatusPill, copyToClipboard, useQrCode } from '../components/Ui';
 import { diagnosisCompleteness, diagnosisEvidenceLabel, formatDateTime, formatDiagnosisPercentage, formatNumber, getDiagnosisState, getProjectPollInterval, getProjectStatus } from '../lib/presentation';
 import { usePageVisibility } from '../lib/pageVisibility';
@@ -23,8 +24,20 @@ export function StudentPage() {
 
 function NoProject({ campSlug }: { campSlug: string }) {
   return <AppShell active="我的项目" role="student" campSlug={campSlug}>
-    <main className="dashboard-content narrow-content"><p className="breadcrumb">AI 产品共创课　/　我的项目</p><h1>你的作品还在准备中</h1><p className="empty-copy">老师为你创建项目后，这里会显示作品、提交记录和上线入口。</p></main>
+    <main className="dashboard-content narrow-content"><header className="page-heading submission-entry-heading"><div><p className="breadcrumb">AI 产品共创课　/　我的项目</p><h1>你的作品还在准备中</h1><p className="empty-copy">老师为你创建项目后，这里会显示作品、提交记录和上线入口。</p></div><SubmissionCta label="提交我的游戏" /></header></main>
   </AppShell>;
+}
+
+export function getStudentSubmissionAction({ pending, live, rejected }: { pending: boolean; live: boolean; rejected: boolean }) {
+  if (rejected) return { label: '修改后重新提交', note: null };
+  if (pending) return { label: '提交新版本', note: '新提交会替代当前待审版本。' };
+  if (live) return { label: '提交下一版本', note: null };
+  return { label: '提交我的游戏', note: null };
+}
+
+export function StudentSubmissionHeadingActions({ pending, live, rejected, campSlug }: { pending: boolean; live: boolean; rejected: boolean; campSlug: string }) {
+  const action = getStudentSubmissionAction({ pending, live, rejected });
+  return <div className="submission-heading-actions"><div><SubmissionCta label={action.label} />{action.note && <small>{action.note}</small>}</div><ModeTabs campSlug={campSlug} active="app" /></div>;
 }
 
 function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; userName: string }) {
@@ -33,23 +46,21 @@ function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; u
   const status = getProjectStatus({ publish_status: project.publish_status, pending_version: pending, last_review: review });
   const qrImage = useQrCode(project.live_url);
   const [notice, setNotice] = useState<string | null>(null);
-  const nextText = review?.status === 'rejected' ? '根据老师意见修改后，再提交新版本' : pending ? `等待老师审核 ${pending.label}` : live ? '作品已上线，可以继续打磨下一版' : '完成第一个版本后，就可以提交老师审核';
   const copy = () => {
     copyToClipboard(project.live_url).then(() => setNotice('网址已复制')).catch((error) => setNotice(readableError(error, '暂时无法复制网址。')));
   };
   return <AppShell active="我的项目" role="student" campSlug={camp.slug} avatar={userName}>
     <main className="dashboard-content">
-      <header className="page-heading">
+      <header className="page-heading submission-entry-heading">
         <div><p className="breadcrumb">{camp.name}　/　我的项目</p><h1>{project.title}</h1><div className="project-meta"><StatusPill tone={status.tone}>{status.label}</StatusPill><span>{pending?.label || live?.label || '尚未提交版本'}</span><b>·</b><span>{formatDateTime(project.updated_at)} 更新</span></div></div>
-        <ModeTabs campSlug={camp.slug} active="app" />
+        <StudentSubmissionHeadingActions pending={Boolean(pending)} live={Boolean(live)} rejected={review?.status === 'rejected'} campSlug={camp.slug} />
       </header>
       {review?.status === 'rejected' && review.comment && <section className="review-alert"><span>!</span><div><strong>老师退回了这次提交</strong><p>{review.comment}</p></div></section>}
       {notice && <p className="toast" role="status">{notice}</p>}
       <section className="student-top-grid">
         <article className="panel work-panel">
-          <PanelKicker kicker="我的作品" title="现在的项目长这样" icon="✧" action={previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer">查看预览 ↗</a> : undefined} />
+          <PanelKicker kicker="我的作品" title="现在的项目长这样" icon="✧" action={previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer">打开预览 ↗</a> : undefined} />
           <PreviewFrame url={previewUrl} title={`${project.title} 的预览`} className="student-preview" />
-          <div className="work-next"><div><small>下一步</small><strong>{nextText}</strong></div>{previewUrl ? <a className="button button-coral" target="_blank" rel="noreferrer" href={previewUrl}>⌘　继续开发</a> : <span className="button is-disabled">⌘　继续开发</span>}</div>
         </article>
         <aside className="student-side-stack">
           <AccessPanel url={project.live_url} qrImage={qrImage} onCopy={copy} />
