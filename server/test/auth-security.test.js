@@ -134,3 +134,30 @@ test('错误兑换在 Skill 与网页登录之间共享来源限速，且限速�
   });
   assert.equal(otherSource.statusCode, 404);
 });
+
+test('事务内重查可阻止撤销与兑换竞态重新激活邀请码', async () => {
+  const camp = createCamp();
+  insertInvite(camp.id, 'RACE-REVOKED-CODE');
+  const originalPrepare = db.prepare.bind(db);
+  let revokedDuringBegin = false;
+  const originalExec = db.exec.bind(db);
+  db.exec = (sql) => {
+    const result = originalExec(sql);
+    if (sql === 'BEGIN IMMEDIATE' && !revokedDuringBegin) {
+      revokedDuringBegin = true;
+      originalPrepare(`UPDATE invites SET status='revoked', revoked_at=? WHERE code=?`)
+        .run(now(), 'RACE-REVOKED-CODE');
+    }
+    return result;
+  };
+  try {
+    const result = await app.inject({
+      method: 'POST', url: '/api/skill/bind', payload: { code: 'RACE-REVOKED-CODE', device_name: '竞态设备' },
+    });
+    assert.equal(result.statusCode, 403);
+    assert.equal(result.json().error.code, 'invite_revoked');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tokens').get().n, 0);
+  } finally {
+    db.exec = originalExec;
+  }
+});

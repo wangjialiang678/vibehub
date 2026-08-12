@@ -40,21 +40,31 @@ export class InviteRateLimiter {
 export const normalizeInviteCode = (code) => String(code || '').trim().toUpperCase();
 
 export function bindInvite(code, { kind, deviceName }) {
-  const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(code);
-  if (!invite) return { error: ['invite_not_found', 404, '这个邀请码不存在，检查一下有没有输错。', '注意区分数字 0 和字母 O'] };
-  if (invite.status === 'revoked') return { error: ['invite_revoked', 403, '这个邀请码已经被撤销了。', '找老师要一个新的'] };
-  if (invite.expires_at && invite.expires_at < now()) return { error: ['invite_expired', 403, '这个邀请码已经过期了。', '找老师要一个新的'] };
-  if (kind === 'skill' && countDevices(invite.code) >= invite.max_devices) {
-    return { error: ['invite_device_limit', 403,
-      `这个邀请码最多绑定 ${invite.max_devices} 台设备，已经用完了。`, '让老师撤销旧设备，或者要一个新码'] };
-  }
-
-  const camp = db.prepare('SELECT * FROM camps WHERE id = ?').get(invite.camp_id);
-  let user = invite.bound_user_id ? db.prepare('SELECT * FROM users WHERE id = ?').get(invite.bound_user_id) : null;
-  let project = invite.bound_project_id ? db.prepare('SELECT * FROM projects WHERE id = ?').get(invite.bound_project_id) : null;
-
   db.exec('BEGIN IMMEDIATE');
   try {
+    // 所有授权判断必须在同一个写事务内重读；不能用事务前快照与撤销/并发兑换竞争。
+    const invite = db.prepare('SELECT * FROM invites WHERE code = ?').get(code);
+    if (!invite) {
+      db.exec('ROLLBACK');
+      return { error: ['invite_not_found', 404, '这个邀请码不存在，检查一下有没有输错。', '注意区分数字 0 和字母 O'] };
+    }
+    if (invite.status === 'revoked') {
+      db.exec('ROLLBACK');
+      return { error: ['invite_revoked', 403, '这个邀请码已经被撤销了。', '找老师要一个新的'] };
+    }
+    if (invite.expires_at && invite.expires_at < now()) {
+      db.exec('ROLLBACK');
+      return { error: ['invite_expired', 403, '这个邀请码已经过期了。', '找老师要一个新的'] };
+    }
+    if (kind === 'skill' && countDevices(invite.code) >= invite.max_devices) {
+      db.exec('ROLLBACK');
+      return { error: ['invite_device_limit', 403,
+        `这个邀请码最多绑定 ${invite.max_devices} 台设备，已经用完了。`, '让老师撤销旧设备，或者要一个新码'] };
+    }
+
+    const camp = db.prepare('SELECT * FROM camps WHERE id = ?').get(invite.camp_id);
+    let user = invite.bound_user_id ? db.prepare('SELECT * FROM users WHERE id = ?').get(invite.bound_user_id) : null;
+    let project = invite.bound_project_id ? db.prepare('SELECT * FROM projects WHERE id = ?').get(invite.bound_project_id) : null;
     if (!user) {
       const uid = 'u_' + nanoid(10);
       const uname = `student-${nanoid(6).toLowerCase()}`;

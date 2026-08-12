@@ -40,7 +40,7 @@ audience: tech
 }
 ```
 
-claim 有效期固定为 10 分钟，绑定 `preview_id + version_id + project_id + user_id + camp_id + role + issuer_token_id`。每个 `preview_id` 使用不同 origin；任何携带 query claim 的请求都**只做交换**：Node 校验后设置该 preview origin 下、预览路径专用的 host-only、HttpOnly cookie，再以 `303` 跳转到删除 `claim`、保留其他 query 的同路径；该响应绝不返回或执行作品内容。CSS、JS、图片等后续请求只带 cookie，不再复制 claim 到资源 URL。
+claim 有效期固定为 10 分钟，绑定 `preview_id + version_id + project_id + user_id + camp_id + role + issuer_token_id`。每个 `preview_id` 使用不同 origin；任何携带 query claim 的请求都**只做交换**：Node 校验后设置该 preview origin 下的 host-only、HttpOnly cookie（Path 为 `/`，供同 host 的预览资源与 BaaS 共同验权），再以 `303` 跳转到删除 `claim`、保留其他 query 的同路径；该响应绝不返回或执行作品内容。CSS、JS、图片等后续请求只带 cookie，不再复制 claim 到资源 URL。
 
 Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、拒绝其他预览 origin 发起的请求，并重新检查签发 token 仍未撤销/过期、用户仍是课程成员且角色未变，以及版本仍是该项目当前待审版本。邀请码撤销、成员移除、角色变化、`superseded`、`rejected`、诊断 blocker 清退或正式发布都会让已经换取的 cookie 立即返回 404。响应一律包含 `Cache-Control: no-store`、`Referrer-Policy: same-origin` 和 `Cross-Origin-Resource-Policy: same-origin`：同域 Referer 仅用于 BaaS 反查项目，外域请求不携带预览路径。应用请求日志只保留 path、丢弃全部 query；预览 Nginx 虚拟主机关闭 access log，并把 error log 置为 `/dev/null crit`，避免编码参数名或 upstream 错误把 claim 请求行落盘。
 

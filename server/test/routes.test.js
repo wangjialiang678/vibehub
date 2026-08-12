@@ -775,9 +775,21 @@ test('BaaS 预览身份同时绑定独立 origin 与 preview path，A 域不能�
   db.prepare(`INSERT INTO baas_records (id,project_id,collection,data,created_at) VALUES (?,?,?,?,?)`)
     .run(nextId('rec'), second.project.id, 'messages', JSON.stringify({ label: 'second-only' }), now());
 
-  const validReferer = new URL('page.html', configuredPreviewUrl(secondVersion.previewId)).href;
+  const grant = await app.inject({
+    method: 'POST', url: `/api/previews/${secondVersion.previewId}/grant`,
+    headers: { authorization: `Bearer ${second.token}` },
+  });
+  assert.equal(grant.statusCode, 200);
+  const granted = new URL(grant.json().preview_url);
+  const exchange = await app.inject({
+    method: 'GET', url: granted.pathname + granted.search, headers: { host: granted.host },
+  });
+  assert.equal(exchange.statusCode, 303);
+  const cookie = exchange.headers['set-cookie'].split(';', 1)[0];
+  const validReferer = new URL('page.html', `${granted.origin}${exchange.headers.location}`).href;
   const valid = await app.inject({
-    method: 'GET', url: '/baas/v1/messages', headers: { referer: validReferer },
+    method: 'GET', url: '/baas/v1/messages',
+    headers: { host: granted.host, referer: validReferer, cookie },
   });
   assert.equal(valid.statusCode, 200);
   assert.deepEqual(valid.json().items.map((item) => item.label), ['second-only']);
@@ -785,7 +797,8 @@ test('BaaS 预览身份同时绑定独立 origin 与 preview path，A 域不能�
   const forgedReferer = new URL(validReferer);
   forgedReferer.host = new URL(configuredPreviewUrl(firstVersion.previewId)).host;
   const forged = await app.inject({
-    method: 'GET', url: '/baas/v1/messages', headers: { referer: forgedReferer.href },
+    method: 'GET', url: '/baas/v1/messages',
+    headers: { host: forgedReferer.host, referer: forgedReferer.href, cookie },
   });
   assert.equal(forged.statusCode, 400);
 });
@@ -981,6 +994,7 @@ test('预览匿名访问返回 404，owner 与同课程老师只用 claim 换 co
     const cookie = first.headers['set-cookie'].split(';', 1)[0];
     assert.doesNotMatch(first.headers['set-cookie'], /Domain=/i);
     assert.match(first.headers['set-cookie'], /HttpOnly/i);
+    assert.match(first.headers['set-cookie'], /Path=\/(?:;|$)/i);
     const page = await app.inject({ method: 'GET', url: first.headers.location, headers: { host: granted.host, cookie } });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /测试页面/);
@@ -990,6 +1004,7 @@ test('预览匿名访问返回 404，owner 与同课程老师只用 claim 换 co
       headers: {
         host: granted.host,
         referer: `${granted.origin}${first.headers.location}`,
+        cookie,
         'sec-fetch-dest': 'empty',
         'sec-fetch-mode': 'cors',
         'sec-fetch-site': 'same-origin',
@@ -1050,6 +1065,29 @@ test('签发 token 被邀请码撤销后，已经换取的预览 cookie 立即�
   });
   assert.equal(revoked.statusCode, 200);
   assert.equal((await app.inject({ method: 'GET', url: cleanPath, headers: { host: granted.host, cookie } })).statusCode, 404);
+  const baasAfterRevoke = await app.inject({
+    method: 'GET', url: '/baas/v1/messages',
+    headers: { host: granted.host, referer: `${granted.origin}${cleanPath}`, cookie },
+  });
+  assert.equal(baasAfterRevoke.statusCode, 400);
+});
+
+test('预览 BaaS 必须同时持有仍有效的预览 cookie，伪造 Referer 不足以授权', async () => {
+  const camp = createCamp();
+  const student = await bindStudent(camp.id);
+  const version = addVersion(student.project.id, student.user.id, 1);
+  activatePreview(student.project.id, version);
+  const grant = await app.inject({
+    method: 'POST', url: `/api/previews/${version.previewId}/grant`, headers: { authorization: `Bearer ${student.token}` },
+  });
+  const granted = new URL(grant.json().preview_url);
+  const cleanPath = `/vibehub/_preview/${version.previewId}/`;
+  const forged = await app.inject({
+    method: 'GET', url: '/baas/v1/messages',
+    headers: { host: granted.host, referer: `${granted.origin}${cleanPath}` },
+  });
+  assert.equal(forged.statusCode, 400);
+  assert.equal(forged.json().error.code, 'unknown_project');
 });
 
 test('owner 被移出课程后，已经换取的预览 cookie 立即失效', async () => {

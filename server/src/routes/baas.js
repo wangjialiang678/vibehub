@@ -6,6 +6,7 @@ import { db, now } from '../lib/db.js';
 import { paths, LIMITS, WORKS_PREFIX, WORKS_ORIGIN, previewOrigin } from '../lib/config.js';
 import { projectDiskUsage } from '../services/storage.js';
 import { authRequired } from '../lib/auth.js';
+import { authorizePreviewRequest, previewCookieName } from '../services/preview-access.js';
 
 /**
  * 最小 BaaS。学员作品是公开静态页 → **作品里没有秘密**。
@@ -41,8 +42,10 @@ function resolveProject(req) {
     // preview_id 同时绑定 path 与独立 origin；不能拿 A 预览 host 冒充 B 项目路径。
     try { if (sourceUrl.origin !== previewOrigin(pm[1])) return null; }
     catch { return null; }
-    const row = db.prepare(`SELECT p.* FROM projects p JOIN versions v ON v.project_id=p.id
-                            WHERE v.preview_id=?`).get(pm[1]);
+    const previewId = pm[1];
+    const access = authorizePreviewRequest(previewId, req.cookies?.[previewCookieName(previewId)]);
+    if (!access) return null;
+    const row = db.prepare('SELECT * FROM projects WHERE id=?').get(access.project_id);
     if (row) return row;
   }
 

@@ -237,7 +237,8 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     }
     if (hasQueryClaim) {
       reply.setCookie(cookieName, queryClaim, {
-        path: `${WORKS_PREFIX}/_preview/${req.params.pid}`,
+        // 每个 preview_id 已有独立 host；Path=/ 让同 host 的 /baas 请求也能验证该预览身份。
+        path: '/',
         httpOnly: true,
         sameSite: 'lax',
         secure: process.env.NODE_ENV === 'production',
