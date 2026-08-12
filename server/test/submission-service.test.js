@@ -483,6 +483,40 @@ test('启动恢复遇到原路径冲突时，随后普通 prune 不会标记或�
   assert.equal(existsSync(join(quarantine, 'version', 'index.html')), true);
 });
 
+test('重启删除无 manifest 的空 work，并允许后续正常 prune', () => {
+  const f = fixture();
+  const obsolete = addStoredVersion(f, { seq: 46, previewId: `e${String(sequence).padStart(15, '0')}` });
+  const work = join(paths.tmp, `prune_work_empty_${sequence}`);
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(work, 'manifest.json.tmp'), 'incomplete');
+
+  const recovery = recoverPruneQuarantines();
+  const cleanup = pruneProjectArtifacts(f.projectId);
+
+  assert.equal(recovery.failures.length, 0);
+  assert.equal(existsSync(work), false);
+  assert.equal(cleanup.pruned, 1);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(obsolete.versionId).artifact_pruned, 1);
+});
+
+test('无 manifest 且含产物的 work 保守保留并告警，但不阻塞其他版本 prune', () => {
+  const f = fixture();
+  const obsolete = addStoredVersion(f, { seq: 47, previewId: `u${String(sequence).padStart(15, '0')}` });
+  const work = join(paths.tmp, `prune_work_unknown_${sequence}`);
+  mkdirSync(join(work, 'version'), { recursive: true });
+  writeFileSync(join(work, 'version', 'index.html'), 'unique unknown artifact');
+  const warnings = [];
+
+  const recovery = recoverPruneQuarantines({ logger: { warn(detail, message) { warnings.push({ detail, message }); } } });
+  const cleanup = pruneProjectArtifacts(f.projectId);
+
+  assert.equal(recovery.failures.length, 1);
+  assert.equal(warnings.length, 1);
+  assert.equal(existsSync(join(work, 'version', 'index.html')), true);
+  assert.equal(cleanup.pruned, 1);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(obsolete.versionId).artifact_pruned, 1);
+});
+
 test('tmp 清理保留恢复和 work 隔离区但回收已提交的 delete 隔离区', () => {
   const recovery = join(paths.tmp, 'prune_recovery_keep');
   const work = join(paths.tmp, 'prune_work_old');

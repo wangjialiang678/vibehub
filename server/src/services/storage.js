@@ -48,14 +48,14 @@ function warnRecovery(logger, reason) {
 
 function protectedPruneVersions() {
   const versionIds = new Set();
-  if (!existsSync(paths.tmp)) return { versionIds, invalid: false };
+  if (!existsSync(paths.tmp)) return versionIds;
   for (const entry of readdirSync(paths.tmp, { withFileTypes: true })) {
     if (!entry.isDirectory()
         || (!entry.name.startsWith('prune_recovery_') && !entry.name.startsWith('prune_work_'))) continue;
     try { versionIds.add(readPruneManifest(join(paths.tmp, entry.name)).versionId); }
-    catch { return { versionIds, invalid: true }; }
+    catch { /* 无法归属的隔离区由恢复流程保守保留，但不冻结其他项目。 */ }
   }
-  return { versionIds, invalid: false };
+  return versionIds;
 }
 
 export class ProjectQuotaError extends Error {
@@ -108,16 +108,13 @@ export function assertProjectedQuota(projectId, incomingBytes) {
 }
 
 export function pruneProjectArtifacts(projectId, { removeQuarantine = rmSync } = {}) {
-  const protectedState = protectedPruneVersions();
-  if (protectedState.invalid) {
-    return { pruned: 0, failures: [{ version_id: null, error: new Error('unrecoverable prune manifest') }] };
-  }
+  const protectedVersions = protectedPruneVersions();
   const retained = retainedVersionIds(projectId);
   const versions = db.prepare('SELECT id,preview_id FROM versions WHERE project_id=? AND artifact_pruned=0').all(projectId);
   let pruned = 0;
   const failures = [];
   for (const version of versions) {
-    if (retained.has(version.id) || protectedState.versionIds.has(version.id)) continue;
+    if (retained.has(version.id) || protectedVersions.has(version.id)) continue;
     const versionPath = versionDir(version.id);
     const previewPath = previewLink(version.preview_id);
     const quarantineId = randomUUID();
@@ -194,8 +191,23 @@ export function recoverPruneQuarantines({ logger = null, removeQuarantine = rmSy
       && (entry.name.startsWith('prune_recovery_') || entry.name.startsWith('prune_work_')));
   for (const entry of entries) {
     const quarantine = join(paths.tmp, entry.name);
+    let manifest;
     try {
-      const manifest = readPruneManifest(quarantine);
+      manifest = readPruneManifest(quarantine);
+    } catch (error) {
+      const contents = readdirSync(quarantine, { withFileTypes: true });
+      const emptyWork = entry.name.startsWith('prune_work_')
+        && contents.every((item) => item.isFile() && item.name === `${PRUNE_MANIFEST}.tmp`);
+      if (emptyWork) {
+        rmSync(quarantine, { recursive: true, force: true });
+        result.deleted += 1;
+      } else {
+        result.failures.push({ error });
+        warnRecovery(logger, 'manifest_unavailable');
+      }
+      continue;
+    }
+    try {
       const row = db.prepare('SELECT id,preview_id,artifact_pruned FROM versions WHERE id=?').get(manifest.versionId);
       if (!row || row.preview_id !== manifest.previewId) throw new Error('prune manifest has no matching version');
       if (row.artifact_pruned) {
