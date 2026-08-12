@@ -242,8 +242,6 @@ export async function submitVersion({
     if (!previewGrant) {
       throw new SubmissionError('preview_unavailable', '预览授权创建失败，请重新提交。', 500);
     }
-    // 入队前先收敛其他历史产物，但暂时保留旧 pending，确保入队失败仍可完整回滚。
-    pruneProjectArtifacts(projectId, [project.pending_version_id]);
     const queued = diagnosisQueue.enqueue({
       versionId: vid,
       projectId,
@@ -252,11 +250,20 @@ export async function submitVersion({
       previewUrl: () => createPreviewGrant(previewId, auth)?.preview_url,
       flows: normalizedMeta.flows,
     });
-    // enqueue 只同步登记并以 microtask 启动任务；这里仍先于诊断执行。
-    // 清理失败只会多留一份旧产物，不能再回滚并制造指向已删除新版的孤儿任务。
-    try { pruneProjectArtifacts(projectId); } catch { /* 服务重启时会再次收敛历史产物 */ }
-
+    // enqueue 是最后一个不可回滚提交点。此后清理只能减少冗余，绝不能让请求失败或回滚新版本。
     completed = true;
+    try {
+      const cleanup = pruneProjectArtifacts(projectId);
+      if (cleanup.failures.length) {
+        try {
+          diagnosisQueue.log?.warn({ project_id: projectId, failures: cleanup.failures }, '版本产物清理未完全完成，稍后重试');
+        } catch { /* 日志故障不能影响已经完成的提交 */ }
+      }
+    } catch (cleanupError) {
+      try {
+        diagnosisQueue.log?.warn({ err: cleanupError, project_id: projectId }, '版本产物清理失败，稍后重试');
+      } catch { /* 日志故障不能影响已经完成的提交 */ }
+    }
     return {
       version_id: vid,
       seq,

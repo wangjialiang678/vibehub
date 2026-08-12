@@ -1293,7 +1293,7 @@ test('每个项目只保留当前正式、上一正式与当前待审三份产�
   const review2 = addReview({ versionId: live.id, projectId: project.id, campId: camp.id, status: 'approved' });
   db.prepare('UPDATE reviews SET decided_at=? WHERE id IN (?,?)').run(now(), review1, review2);
   db.prepare('UPDATE projects SET live_version_id=?,pending_version_id=? WHERE id=?').run(live.id, pending.id, project.id);
-  assert.equal(pruneProjectArtifacts(project.id), 1);
+  assert.equal(pruneProjectArtifacts(project.id).pruned, 1);
   assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(obsolete.id).artifact_pruned, 1);
   assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(previous.id).artifact_pruned, 0);
   assert.equal(projectDiskUsage(project.id).used_bytes, 96);

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, rmSync, statSync, statfsSync } from 'node:fs';
 import { join } from 'node:path';
 import { db } from '../lib/db.js';
 import { LIMITS, paths } from '../lib/config.js';
-import { previewLink, versionDir } from './publish.js';
+import { makePreview, previewLink, versionDir } from './publish.js';
 
 export class ProjectQuotaError extends Error {
   constructor(usedBytes, incomingBytes) {
@@ -53,20 +53,36 @@ export function assertProjectedQuota(projectId, incomingBytes) {
   return { used_bytes: used, quota_bytes: LIMITS.projectDiskBytes };
 }
 
-export function pruneProjectArtifacts(projectId, additionalRetainedIds = []) {
+export function pruneProjectArtifacts(projectId) {
   const retained = retainedVersionIds(projectId);
-  for (const versionId of additionalRetainedIds) if (versionId) retained.add(versionId);
   const versions = db.prepare('SELECT id,preview_id FROM versions WHERE project_id=? AND artifact_pruned=0').all(projectId);
   let pruned = 0;
+  const failures = [];
   for (const version of versions) {
     if (retained.has(version.id)) continue;
-    // 只删除版本快照和指向它的预览链接；元数据和内容哈希仍留在数据库。
-    rmSync(previewLink(version.preview_id), { force: true });
-    rmSync(versionDir(version.id), { recursive: true, force: true });
-    db.prepare('UPDATE versions SET artifact_pruned=1 WHERE id=?').run(version.id);
-    pruned += 1;
+    let transactionStarted = false;
+    try {
+      // 每个版本独立提交：数据库更新若失败时，文件系统尚未动；文件删除失败则回滚标记。
+      db.exec('BEGIN IMMEDIATE');
+      transactionStarted = true;
+      db.prepare('UPDATE versions SET artifact_pruned=1 WHERE id=?').run(version.id);
+      rmSync(previewLink(version.preview_id), { force: true });
+      rmSync(versionDir(version.id), { recursive: true, force: true });
+      db.exec('COMMIT');
+      transactionStarted = false;
+      pruned += 1;
+    } catch (error) {
+      if (transactionStarted) {
+        try { db.exec('ROLLBACK'); } catch { /* 记录原始清理错误 */ }
+      }
+      // 若预览链接已删但版本目录仍完整，恢复链接以保持未清理版本可预览。
+      if (existsSync(versionDir(version.id)) && !existsSync(previewLink(version.preview_id))) {
+        try { makePreview({ previewId: version.preview_id, versionId: version.id }); } catch { /* 下次清理继续处理 */ }
+      }
+      failures.push({ version_id: version.id, error });
+    }
   }
-  return pruned;
+  return { pruned, failures };
 }
 
 export function cleanupTmp(maxAgeMs = 60 * 60 * 1000) {

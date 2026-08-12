@@ -14,6 +14,7 @@ const { db, now } = await import('../src/lib/db.js');
 const { issueToken, resolveToken } = await import('../src/lib/auth.js');
 const { paths } = await import('../src/lib/config.js');
 const { pruneProjectArtifacts } = await import('../src/services/storage.js');
+const { makePreview } = await import('../src/services/publish.js');
 const {
   SubmissionError,
   findActiveDuplicateVersion,
@@ -80,6 +81,19 @@ function htmlSource(content = '<main>这是一个内容完整、可以提交和�
   const source = join(root, '作品.html');
   writeFileSync(source, content);
   return { root, source };
+}
+
+function addStoredVersion(f, { seq, previewId }) {
+  const versionId = `v_stored_${sequence}_${seq}`;
+  const dir = join(paths.versions, versionId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'index.html'), `<main>stored ${seq}</main>`);
+  db.prepare(`INSERT INTO versions
+    (id,project_id,label,seq,bundle_sha,bundle_size,file_count,preview_id,submitted_by,submitted_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(versionId, f.projectId, `v${seq}`, seq, `sha-stored-${sequence}-${seq}`, 32, 1, previewId, f.userId, now());
+  makePreview({ previewId, versionId });
+  return { versionId, dir, previewPath: join(paths.previews, previewId) };
 }
 
 function multipartUploads(files) {
@@ -245,31 +259,61 @@ test('诊断入队失败会恢复旧 pending 并清除新版本的数据库和�
   assert.equal(existsSync(upload.source), false);
 });
 
-test('入队后的最终清理失败只保留冗余记录，不回滚诊断任务指向的新版本', async () => {
+test('产物清理部分失败不影响提交，失败项保持完整未标记且后续项继续清理', async () => {
   const f = fixture();
   const first = await submit(f);
   const oldVersionId = first.result.version_id;
   db.prepare('INSERT INTO reviews (id,version_id,project_id,camp_id,status,created_at) VALUES (?,?,?,?,?,?)')
     .run(`r_prune_pending_${sequence}`, oldVersionId, f.projectId, f.campId, 'pending', now());
+  const failed = addStoredVersion(f, { seq: 20, previewId: `f${String(sequence).padStart(15, '0')}` });
+  const later = addStoredVersion(f, { seq: 21, previewId: `s${String(sequence).padStart(15, '0')}` });
+  rmSync(failed.previewPath, { force: true });
+  mkdirSync(failed.previewPath, { recursive: true });
   const upload = htmlSource('<main>这是最终清理故障时仍应保持可诊断的新版本。</main>');
-  db.exec(`CREATE TRIGGER fail_artifact_prune BEFORE UPDATE OF artifact_pruned ON versions
-           WHEN NEW.artifact_pruned=1 BEGIN SELECT RAISE(ABORT, 'forced prune failure'); END`);
+  const warnings = [];
+  const queue = {
+    log: { warn(detail, message) { warnings.push({ detail, message }); } },
+    enqueue: f.diagnosisQueue.enqueue,
+  };
 
-  let result;
-  try {
-    result = await submitVersion({
-      projectId: f.projectId, userId: f.userId, auth: f.auth,
-      source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: f.diagnosisQueue,
-    });
-  } finally {
-    db.exec('DROP TRIGGER IF EXISTS fail_artifact_prune');
-  }
+  const result = await submitVersion({
+    projectId: f.projectId, userId: f.userId, auth: f.auth,
+    source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: queue,
+  });
 
   assert.equal(db.prepare('SELECT pending_version_id FROM projects WHERE id=?').get(f.projectId).pending_version_id, result.version_id);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM versions WHERE id=?').get(result.version_id).n, 1);
   assert.equal(existsSync(join(paths.versions, result.version_id, 'index.html')), true);
   assert.equal(f.enqueued.at(-1).versionId, result.version_id);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(failed.versionId).artifact_pruned, 0);
+  assert.equal(existsSync(failed.dir), true);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(later.versionId).artifact_pruned, 1);
+  assert.equal(existsSync(later.dir), false);
+  assert.equal(warnings.length, 1);
   assert.equal(existsSync(upload.source), false);
+});
+
+test('数据库清理标记失败时不先删除版本目录，并继续清理后续版本', () => {
+  const f = fixture();
+  const failed = addStoredVersion(f, { seq: 30, previewId: `d${String(sequence).padStart(15, '0')}` });
+  const later = addStoredVersion(f, { seq: 31, previewId: `t${String(sequence).padStart(15, '0')}` });
+  db.exec(`CREATE TRIGGER fail_one_prune BEFORE UPDATE OF artifact_pruned ON versions
+           WHEN OLD.id='${failed.versionId}' AND NEW.artifact_pruned=1
+           BEGIN SELECT RAISE(ABORT, 'forced marker failure'); END`);
+
+  let cleanup;
+  try {
+    cleanup = pruneProjectArtifacts(f.projectId);
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_one_prune');
+  }
+
+  assert.equal(cleanup.pruned, 1);
+  assert.deepEqual(cleanup.failures.map((item) => item.version_id), [failed.versionId]);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(failed.versionId).artifact_pruned, 0);
+  assert.equal(existsSync(failed.dir), true);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(later.versionId).artifact_pruned, 1);
+  assert.equal(existsSync(later.dir), false);
 });
 
 test('预览授权失败会在诊断入队前回滚新版本', async () => {
