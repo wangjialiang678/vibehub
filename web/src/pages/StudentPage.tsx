@@ -29,8 +29,8 @@ function NoProject({ campSlug }: { campSlug: string }) {
 }
 
 export function getStudentSubmissionAction({ pending, live, rejected }: { pending: boolean; live: boolean; rejected: boolean }) {
-  if (rejected) return { label: '修改并重新提交', note: null };
   if (pending) return { label: '提交新版本', note: '新提交会替代当前待审版本。' };
+  if (rejected) return { label: '修改并重新提交', note: null };
   if (live) return { label: '提交下一版本', note: null };
   return { label: '提交我的游戏', note: null };
 }
@@ -40,12 +40,40 @@ export function StudentSubmissionHeadingActions({ pending, live, rejected, campS
   return <div className="submission-heading-actions"><div><SubmissionCta label={action.label} />{action.note && <small>{action.note}</small>}</div><ModeTabs campSlug={campSlug} active="app" /></div>;
 }
 
-function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; userName: string }) {
+type StudentPreviewDependencies = {
+  grantPreview: typeof api.previewGrant;
+  openWindow: (url: string, target: string, features: string) => unknown;
+  setNotice: (notice: string) => void;
+};
+
+function previewId(url: string) {
+  try { return /\/vibehub\/_preview\/([a-z0-9]+)\//i.exec(new URL(url).pathname)?.[1] || null; } catch { return null; }
+}
+
+export async function openStudentPreview(url: string, dependencies: StudentPreviewDependencies) {
+  try {
+    const pid = previewId(url);
+    const destination = pid ? (await dependencies.grantPreview(pid)).preview_url : url;
+    dependencies.openWindow(destination, '_blank', 'noopener,noreferrer');
+  } catch (error) {
+    dependencies.setNotice(readableError(error, '这个预览暂时打不开。'));
+  }
+}
+
+export function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; userName: string }) {
   const { project, camp, pending_version: pending, live_version: live, latest_diagnosis: diagnosis, stats, timeline, last_review: review } = snapshot;
   const previewUrl = pending?.preview_url || project.live_url || null;
   const status = getProjectStatus({ publish_status: project.publish_status, pending_version: pending, last_review: review });
   const qrImage = useQrCode(project.live_url);
   const [notice, setNotice] = useState<string | null>(null);
+  const openPreview = () => {
+    if (!previewUrl) return;
+    void openStudentPreview(previewUrl, {
+      grantPreview: api.previewGrant,
+      openWindow: (url, target, features) => window.open(url, target, features),
+      setNotice,
+    });
+  };
   const copy = () => {
     copyToClipboard(project.live_url).then(() => setNotice('网址已复制')).catch((error) => setNotice(readableError(error, '暂时无法复制网址。')));
   };
@@ -53,13 +81,13 @@ function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; u
     <main className="dashboard-content">
       <header className="page-heading submission-entry-heading">
         <div><p className="breadcrumb">{camp.name}　/　我的项目</p><h1>{project.title}</h1><div className="project-meta"><StatusPill tone={status.tone}>{status.label}</StatusPill><span>{pending?.label || live?.label || '尚未提交版本'}</span><b>·</b><span>{formatDateTime(project.updated_at)} 更新</span></div></div>
-        <StudentSubmissionHeadingActions pending={Boolean(pending)} live={Boolean(live)} rejected={review?.status === 'rejected'} campSlug={camp.slug} />
+        <StudentSubmissionHeadingActions pending={Boolean(pending)} live={Boolean(live)} rejected={!pending && review?.status === 'rejected'} campSlug={camp.slug} />
       </header>
-      {review?.status === 'rejected' && review.comment && <section className="review-alert"><span>!</span><div><strong>老师退回了这次提交</strong><p>{review.comment}</p></div></section>}
+      {!pending && review?.status === 'rejected' && review.comment && <section className="review-alert"><span>!</span><div><strong>老师退回了这次提交</strong><p>{review.comment}</p></div></section>}
       {notice && <p className="toast" role="status">{notice}</p>}
       <section className="student-top-grid">
         <article className="panel work-panel">
-          <PanelKicker kicker="我的作品" title="现在的项目长这样" icon="✧" action={previewUrl ? <a href={previewUrl} target="_blank" rel="noreferrer">打开预览 ↗</a> : undefined} />
+          <PanelKicker kicker="我的作品" title="现在的项目长这样" icon="✧" action={previewUrl ? <button type="button" className="panel-link-button" onClick={openPreview}>打开预览 ↗</button> : undefined} />
           <PreviewFrame url={previewUrl} title={`${project.title} 的预览`} className="student-preview" />
         </article>
         <aside className="student-side-stack">

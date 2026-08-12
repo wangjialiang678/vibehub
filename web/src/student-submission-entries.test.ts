@@ -4,9 +4,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { copyToClipboard } from './components/Ui';
+import { ApiError } from './lib/api';
+import { getProjectStatus } from './lib/presentation';
+import type { ProjectSnapshot } from './lib/types';
 import {
+  StudentDashboard,
   StudentSubmissionHeadingActions,
   getStudentSubmissionAction,
+  openStudentPreview,
 } from './pages/StudentPage';
 import { VersionSubmissionActions } from './pages/StudentVersionsPage';
 import {
@@ -29,11 +34,58 @@ function render(component: React.ReactNode) {
 }
 
 describe('学员提交入口', () => {
-  it('按项目状态给出四种明确动作，退回优先于其他状态', () => {
+  it('按当前项目状态给出明确动作，新的待审版本优先于旧退回记录', () => {
     expect(getStudentSubmissionAction({ pending: false, live: false, rejected: false })).toEqual({ label: '提交我的游戏', note: null });
     expect(getStudentSubmissionAction({ pending: true, live: false, rejected: false })).toEqual({ label: '提交新版本', note: '新提交会替代当前待审版本。' });
-    expect(getStudentSubmissionAction({ pending: true, live: true, rejected: true })).toEqual({ label: '修改并重新提交', note: null });
+    expect(getStudentSubmissionAction({ pending: true, live: true, rejected: true })).toEqual({ label: '提交新版本', note: '新提交会替代当前待审版本。' });
+    expect(getStudentSubmissionAction({ pending: false, live: true, rejected: true })).toEqual({ label: '修改并重新提交', note: null });
     expect(getStudentSubmissionAction({ pending: false, live: true, rejected: false })).toEqual({ label: '提交下一版本', note: null });
+  });
+
+  it('已有新待审版本时，页面不再显示旧退回警告或退回状态', () => {
+    const snapshot: ProjectSnapshot = {
+      project: { id: 'project-1', slug: 'game', title: '小游戏', publish_status: 'published_with_pending', live_url: 'https://works.example/game/', updated_at: '2026-08-13T08:00:00Z' },
+      owner: { id: 'user-1', username: 'student', display_name: '小明' },
+      camp: { id: 'camp-1', slug: 'shenzhen', name: '深圳营', kind: 'game' },
+      live_version: { id: 'version-1', label: 'v1', preview_url: null },
+      pending_version: { id: 'version-2', label: 'v2', preview_url: 'https://works.example/vibehub/_preview/preview2/' },
+      latest_diagnosis: null,
+      last_review: { status: 'rejected', comment: '这是上一次提交的退回意见', version_id: 'version-1' },
+      stats: { total_views: 0, today_views: 0 },
+      timeline: [],
+    };
+
+    const html = render(createElement(StudentDashboard, { snapshot, userName: '小明' }));
+    expect(getProjectStatus({ publish_status: snapshot.project.publish_status, pending_version: snapshot.pending_version, last_review: snapshot.last_review })).toEqual({ label: '等待审核', tone: 'warning' });
+    expect(html).toContain('等待审核');
+    expect(html).toContain('提交新版本');
+    expect(html).not.toContain('老师退回了这次提交');
+    expect(html).not.toContain('这是上一次提交的退回意见');
+    expect(html).not.toContain('已退回修改');
+  });
+
+  it('打开待审预览时先获取短期授权，再把授权地址交给新窗口', async () => {
+    const grantPreview = vi.fn(async () => ({ preview_url: 'https://works.example/vibehub/_preview/preview2/?claim=short-lived-secret', expires_at: '2026-08-13T09:00:00Z' }));
+    const openWindow = vi.fn();
+    const setNotice = vi.fn();
+
+    await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice });
+
+    expect(grantPreview).toHaveBeenCalledWith('preview2');
+    expect(openWindow).toHaveBeenCalledWith('https://works.example/vibehub/_preview/preview2/?claim=short-lived-secret', '_blank', 'noopener,noreferrer');
+    expect(setNotice).not.toHaveBeenCalled();
+  });
+
+  it('预览授权失败时不打开窗口，且提示中不泄露 claim', async () => {
+    const grantPreview = vi.fn(async () => { throw new ApiError(503, '这个预览暂时打不开。'); });
+    const openWindow = vi.fn();
+    const setNotice = vi.fn();
+
+    await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice });
+
+    expect(openWindow).not.toHaveBeenCalled();
+    expect(setNotice).toHaveBeenCalledWith('这个预览暂时打不开。');
+    expect(setNotice.mock.calls.flat().join('')).not.toContain('claim=');
   });
 
   it('在项目标题区渲染提交入口和待审替代说明', () => {

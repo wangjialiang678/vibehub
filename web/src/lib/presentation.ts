@@ -71,8 +71,8 @@ export function getReviewSummary(item: DiagnosisItemLike | null | undefined, dim
 }
 
 export function getProjectStatus(project: ProjectStatusLike): { label: string; tone: 'success' | 'warning' | 'danger' | 'muted' } {
-  if (project.last_review?.status === 'rejected') return { label: '已退回修改', tone: 'danger' };
   if (project.pending_version) return { label: '等待审核', tone: 'warning' };
+  if (project.last_review?.status === 'rejected') return { label: '已退回修改', tone: 'danger' };
   if (project.publish_status === 'published' || project.publish_status === 'published_with_pending') return { label: '已正式上线', tone: 'success' };
   return { label: '还没有正式上线', tone: 'muted' };
 }
