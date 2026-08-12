@@ -13,6 +13,7 @@ import {
   RevealedInviteActions,
   buildStudentInviteMessages,
   copyStudentInviteMessage,
+  publicAppBaseUrl,
 } from './pages/AdminInvitesPage';
 
 const readSource = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
@@ -31,7 +32,7 @@ describe('学员提交入口', () => {
   it('按项目状态给出四种明确动作，退回优先于其他状态', () => {
     expect(getStudentSubmissionAction({ pending: false, live: false, rejected: false })).toEqual({ label: '提交我的游戏', note: null });
     expect(getStudentSubmissionAction({ pending: true, live: false, rejected: false })).toEqual({ label: '提交新版本', note: '新提交会替代当前待审版本。' });
-    expect(getStudentSubmissionAction({ pending: true, live: true, rejected: true })).toEqual({ label: '修改后重新提交', note: null });
+    expect(getStudentSubmissionAction({ pending: true, live: true, rejected: true })).toEqual({ label: '修改并重新提交', note: null });
     expect(getStudentSubmissionAction({ pending: false, live: true, rejected: false })).toEqual({ label: '提交下一版本', note: null });
   });
 
@@ -57,6 +58,17 @@ describe('学员提交入口', () => {
     expect(heading).toContain('href="/app/submit"');
     expect(empty).toContain('开始第一次提交');
     expect(`${heading}${empty}`.match(/href="\/app\/submit"/g)).toHaveLength(2);
+  });
+
+  it('项目尚未创建时不提供无法完成的提交入口', () => {
+    const student = readSource('./pages/StudentPage.tsx');
+    const versions = readSource('./pages/StudentVersionsPage.tsx');
+    const studentNoProject = student.slice(student.indexOf('function NoProject'), student.indexOf('export function getStudentSubmissionAction'));
+    const versionsNoProject = versions.slice(versions.indexOf('if (!me.data.project_id)'), versions.indexOf('if (versions.isPending)'));
+    expect(studentNoProject).not.toContain('SubmissionCta');
+    expect(studentNoProject).toContain('联系老师');
+    expect(versionsNoProject).not.toContain('VersionSubmissionActions');
+    expect(versionsNoProject).toContain('联系老师');
   });
 
   it('提交入口在移动端堆叠并占满可用宽度', () => {
@@ -88,10 +100,18 @@ describe('学员邀请码转发说明', () => {
     expect(messages[0]).toContain('无需 SkillHub');
   });
 
+  it('优先规范化公开构建地址，仅缺失时回退浏览器地址', () => {
+    expect(publicAppBaseUrl(' https://hub.example.test/path/ ', 'https://localhost:5173')).toBe('https://hub.example.test/path');
+    expect(publicAppBaseUrl('', 'https://localhost:5173/')).toBe('https://localhost:5173');
+    expect(publicAppBaseUrl(undefined, 'https://localhost:5173/')).toBe('https://localhost:5173');
+  });
+
   it('student 显示每码独立复制按钮，teacher 不显示学员说明', () => {
     const student = render(createElement(RevealedInviteActions, { role: 'student', codes, campName: '暑期创造营', origin, onCopy: vi.fn(), onExport: vi.fn() }));
     const teacher = render(createElement(RevealedInviteActions, { role: 'teacher', codes, campName: '暑期创造营', origin, onCopy: vi.fn(), onExport: vi.fn() }));
     expect(student.match(/复制发给学员的说明/g)).toHaveLength(2);
+    expect(student).toContain('aria-label="复制第 1 位学员的说明"');
+    expect(student).toContain('aria-label="复制第 2 位学员的说明"');
     expect(student).toContain('无需 SkillHub');
     expect(teacher).not.toContain('复制发给学员的说明');
     expect(teacher).not.toContain('无需 SkillHub');
@@ -100,7 +120,8 @@ describe('学员邀请码转发说明', () => {
   it('只按本次生成时的角色展示说明，且不记录或持久化明码', () => {
     const source = readSource('./pages/AdminInvitesPage.tsx');
     expect(source).toContain('setRevealedRole(input.role)');
-    expect(source).toContain('origin={window.location.origin}');
+    expect(source).toContain('VITE_PUBLIC_APP_URL');
+    expect(source).toContain('publicAppBaseUrl(');
     expect(source).not.toContain('localStorage');
     expect(source).not.toContain('console.');
   });

@@ -11,6 +11,10 @@ import type { InviteListItem } from '../lib/types';
 type InviteRole = 'student' | 'teacher';
 interface CreateInviteInput { count: number; role: InviteRole; max_devices: number }
 
+export function publicAppBaseUrl(configuredUrl: string | undefined, browserOrigin: string) {
+  return (configuredUrl?.trim() || browserOrigin).replace(/\/$/, '');
+}
+
 export function buildStudentInviteMessages(codes: string[], campName: string, origin: string) {
   const baseUrl = origin.replace(/\/$/, '');
   return codes.map((code) => [
@@ -47,7 +51,7 @@ export function RevealedInviteActions({ role, codes, campName, origin, onCopy, o
 }) {
   if (role === 'teacher') return <><pre>{codes.join('\n')}</pre><div><button type="button" className="button button-outline" onClick={() => onCopy(codes.join('\n'), null)}>复制全部</button><button type="button" className="button button-coral" onClick={onExport}>导出 CSV</button></div></>;
   const messages = buildStudentInviteMessages(codes, campName, origin);
-  return <><div className="student-submission-handouts">{messages.map((message, index) => <article key={index}><header><strong>第 {index + 1} 位学员</strong><span>每段说明只含一个邀请码</span></header><pre>{message}</pre><button type="button" className="button button-outline" onClick={() => onCopy(message, index)}>复制发给学员的说明</button></article>)}</div><div><button type="button" className="button button-coral" onClick={onExport}>导出 CSV</button></div></>;
+  return <><div className="student-submission-handouts">{messages.map((message, index) => <article key={index}><header><strong>第 {index + 1} 位学员</strong><span>每段说明只含一个邀请码</span></header><pre>{message}</pre><button type="button" className="button button-outline" aria-label={`复制第 ${index + 1} 位学员的说明`} onClick={() => onCopy(message, index)}>复制发给学员的说明</button></article>)}</div><div><button type="button" className="button button-coral" onClick={onExport}>导出 CSV</button></div></>;
 }
 
 export function AdminInvitesPage() {
@@ -62,6 +66,7 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
   const [revealedCodes, setRevealedCodes] = useState<string[]>([]);
   const [revealedRole, setRevealedRole] = useState<InviteRole | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const appBaseUrl = publicAppBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL, window.location.origin);
   const invites = useQuery({ queryKey: ['invites', campId], queryFn: () => api.invites(campId), retry: false });
   const create = useMutation({
     mutationFn: (input: CreateInviteInput) => api.createInvites(campId, input),
@@ -106,7 +111,7 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
     {notice && <p className="action-message" role="status">{notice}</p>}
     <section className="invite-layout">
       <form className="panel invite-create" onSubmit={submit}><p className="eyebrow">新建一批</p><h2>把人请进营地</h2><label htmlFor="invite-count">数量</label><input id="invite-count" type="number" min="1" max="200" value={count} onChange={(event) => setCount(event.target.value)} /><label htmlFor="invite-role">角色</label><select id="invite-role" value={role} onChange={(event) => setRole(event.target.value as InviteRole)}><option value="student">学员</option><option value="teacher">老师</option></select><label htmlFor="invite-devices">设备上限</label><input id="invite-devices" type="number" min="1" max="20" value={maxDevices} onChange={(event) => setMaxDevices(event.target.value)} />{create.isError && <p className="form-error">{readableError(create.error)}</p>}<button className="button button-coral button-wide" disabled={create.isPending}>{create.isPending ? '正在生成…' : '生成邀请码'}</button></form>
-      <div className="invite-main"><section className="panel invite-reveal"><header><div><p className="eyebrow">刚刚生成</p><h2>明码只显示这一次</h2></div>{revealedCodes.length > 0 && <span>{revealedCodes.length} 个</span>}</header>{revealedCodes.length && revealedRole ? <RevealedInviteActions role={revealedRole} codes={revealedCodes} campName={campName} origin={window.location.origin} onCopy={copyRevealed} onExport={exportCsv} /> : <div className="teacher-empty"><strong>生成后在这里领取邀请码</strong><p>请立即复制或导出保存，刷新页面后只会显示脱敏码。</p></div>}</section>
+      <div className="invite-main"><section className="panel invite-reveal"><header><div><p className="eyebrow">刚刚生成</p><h2>明码只显示这一次</h2></div>{revealedCodes.length > 0 && <span>{revealedCodes.length} 个</span>}</header>{revealedCodes.length && revealedRole ? <RevealedInviteActions role={revealedRole} codes={revealedCodes} campName={campName} origin={appBaseUrl} onCopy={copyRevealed} onExport={exportCsv} /> : <div className="teacher-empty"><strong>生成后在这里领取邀请码</strong><p>请立即复制或导出保存，刷新页面后只会显示脱敏码。</p></div>}</section>
         <section className="panel invite-table"><header><div><p className="eyebrow">全部邀请码</p><h2>发放记录</h2></div><button className="button button-outline" onClick={exportCsv}>导出 CSV</button></header>{invites.data.items.length ? <div className="table-scroll"><table><thead><tr><th>邀请码</th><th>身份 / 状态</th><th>绑定的学员 / 项目</th><th>已用设备</th><th /></tr></thead><tbody>{invites.data.items.map((invite) => <tr key={`${invite.code_masked}-${invite.created_at}`}><td><b>{invite.code_masked}</b><small>{formatDateTime(invite.created_at)}</small></td><td><StatusPill tone={invite.status === 'revoked' ? 'danger' : invite.status === 'bound' ? 'success' : 'muted'}>{invite.role === 'teacher' ? '老师' : '学员'} · {invite.status === 'unused' ? '未使用' : invite.status === 'bound' ? '已绑定' : '已撤销'}</StatusPill></td><td>{invite.bound_user || '尚未绑定'}{invite.bound_project && <small>{invite.bound_project}</small>}</td><td>{invite.devices} / {invite.max_devices}</td><td><button className="button button-outline button-danger" onClick={() => revoke.mutate(invite)} disabled={invite.status === 'revoked' || revoke.isPending}>{revoke.isPending ? '撤销中…' : '撤销'}</button></td></tr>)}</tbody></table></div> : <div className="teacher-empty"><strong>还没有邀请码</strong><p>先生成第一批邀请码，发给本场营的老师和学员。</p></div>}</section>
       </div>
     </section>

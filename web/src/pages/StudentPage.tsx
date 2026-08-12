@@ -24,12 +24,12 @@ export function StudentPage() {
 
 function NoProject({ campSlug }: { campSlug: string }) {
   return <AppShell active="我的项目" role="student" campSlug={campSlug}>
-    <main className="dashboard-content narrow-content"><header className="page-heading submission-entry-heading"><div><p className="breadcrumb">AI 产品共创课　/　我的项目</p><h1>你的作品还在准备中</h1><p className="empty-copy">老师为你创建项目后，这里会显示作品、提交记录和上线入口。</p></div><SubmissionCta label="提交我的游戏" /></header></main>
+    <main className="dashboard-content narrow-content"><p className="breadcrumb">AI 产品共创课　/　我的项目</p><h1>你的作品还在准备中</h1><p className="empty-copy">请联系老师创建项目，准备完成后这里会显示提交和上线入口。</p></main>
   </AppShell>;
 }
 
 export function getStudentSubmissionAction({ pending, live, rejected }: { pending: boolean; live: boolean; rejected: boolean }) {
-  if (rejected) return { label: '修改后重新提交', note: null };
+  if (rejected) return { label: '修改并重新提交', note: null };
   if (pending) return { label: '提交新版本', note: '新提交会替代当前待审版本。' };
   if (live) return { label: '提交下一版本', note: null };
   return { label: '提交我的游戏', note: null };

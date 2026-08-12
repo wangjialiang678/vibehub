@@ -14,7 +14,7 @@ export function StudentVersionsPage() {
   const versions = useQuery({ queryKey: ['versions', me.data?.project_id], queryFn: () => api.versions(me.data!.project_id!), enabled: Boolean(me.data?.project_id), retry: false, refetchInterval: (query) => getVersionHistoryPollInterval({ visible: pageVisible, reviewStatuses: query.state.data?.items.map((version) => version.review?.status) || [] }) });
   if (me.isPending) return <PageState />;
   if (me.isError) return <LoginRequired />;
-  if (!me.data.project_id) return <AppShell active="提交记录" role="student" campSlug={me.data.camp.slug} avatar={me.data.user.display_name}><main className="dashboard-content narrow-content"><header className="page-heading submission-entry-heading"><div><p className="breadcrumb">{me.data.camp.name}　/　提交记录</p><h1>还没有可以查看的提交</h1><p className="empty-copy">老师为你创建作品后，每次提交都会按时间留在这里。</p></div><VersionSubmissionActions campSlug={me.data.camp.slug} /></header></main></AppShell>;
+  if (!me.data.project_id) return <AppShell active="提交记录" role="student" campSlug={me.data.camp.slug} avatar={me.data.user.display_name}><main className="dashboard-content narrow-content"><p className="breadcrumb">{me.data.camp.name}　/　提交记录</p><h1>还没有可以查看的提交</h1><p className="empty-copy">请联系老师创建项目，准备完成后每次提交都会留在这里。</p></main></AppShell>;
   if (versions.isPending) return <PageState title="正在读取提交记录…" />;
   if (versions.isError) return <PageState error={versions.error} action={<Link className="button button-coral" to="/login">重新登录</Link>} />;
 
