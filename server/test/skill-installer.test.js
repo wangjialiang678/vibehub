@@ -75,6 +75,46 @@ test('其他兼容 Agent 可以把完整 Skill 安装到自定义目录', async 
   }
 });
 
+test('--dir 在任何复制或重命名前拒绝危险目录，且不破坏其他 Skills', async (t) => {
+  const cases = [
+    { label: '用户主目录', target: (home) => home },
+    { label: 'skills 根目录', target: (home) => join(home, 'custom-agent', 'skills') },
+    { label: 'Codex skills 根目录', target: (home) => join(home, '.agents', 'skills') },
+    { label: 'Claude skills 根目录', target: (home) => join(home, '.claude', 'skills') },
+    { label: 'WorkBuddy skills 根目录', target: (home) => join(home, '.codebuddy', 'skills') },
+    { label: '明显宽泛的工作区目录', target: (home) => join(home, 'workspace') },
+    { label: '不在 skills 下的 vibehub 目录', target: (home) => join(home, 'projects', 'vibehub') },
+    { label: '名为 vibehub 的文件', target: (home) => join(home, 'custom-agent', 'skills', 'vibehub'), file: true },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, async () => {
+      const home = mkdtempSync(join(tmpdir(), 'vh-skill-install-danger-'));
+      const target = entry.target(home);
+      const sibling = join(home, 'custom-agent', 'skills', 'other-skill');
+      mkdirSync(sibling, { recursive: true });
+      writeFileSync(join(sibling, 'SKILL.md'), 'must survive');
+      if (entry.file) writeFileSync(target, 'must remain a file');
+      else mkdirSync(target, { recursive: true });
+
+      try {
+        const result = await run(process.execPath, [resolve('../skill/bin/install.mjs'), '--home', home, '--dir', target], {
+          cwd: resolve('..'), env: { ...process.env },
+        });
+        assert.notEqual(result.code, 0);
+        assert.match(result.stderr, /自定义目录.*(?:skills.*vibehub|文件)/);
+        assert.doesNotMatch(result.stderr, /\n\s+at\s|install\.mjs:\d+/);
+        assert.equal(readFileSync(join(sibling, 'SKILL.md'), 'utf8'), 'must survive');
+        assert.equal(existsSync(join(home, '.vibehub', 'skill-backups')), false);
+        assert.equal(readdirSync(join(target, '..')).some((name) => name.includes('.staging-')), false);
+        if (entry.file) assert.equal(readFileSync(target, 'utf8'), 'must remain a file');
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 test('重复安装会备份已有 Skill 后再更新', async () => {
   const home = mkdtempSync(join(tmpdir(), 'vh-skill-install-backup-'));
   const destination = join(home, '.agents', 'skills', 'vibehub');

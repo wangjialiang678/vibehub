@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,22 @@ const files = ['SKILL.md', 'AGENTS.md', 'bin/vibehub', 'lib/platform.mjs', 'agen
 function fail(message) {
   console.error(`✗ ${message}`);
   process.exit(1);
+}
+
+function validateCustomDir(destination) {
+  if (basename(destination) !== 'vibehub' || basename(dirname(destination)) !== 'skills') {
+    fail('自定义目录必须是完整的 Skill 根目录，路径格式应为 …/skills/vibehub。');
+  }
+  if (existsSync(destination)) {
+    const destinationStat = lstatSync(destination);
+    if (!destinationStat.isDirectory() || destinationStat.isSymbolicLink()) {
+      fail('自定义目录必须是真实的目录，不能是文件或符号链接。');
+    }
+  }
+  const parent = dirname(destination);
+  if (existsSync(parent) && !lstatSync(parent).isDirectory()) {
+    fail('自定义目录的 skills 上级路径不是目录，请检查后重试。');
+  }
 }
 
 function parseArgs(args) {
@@ -34,6 +50,7 @@ function parseArgs(args) {
   if (!targets.length && !customDirs.length) fail('至少选择一个 AI 工具或自定义目录');
   const unknown = targets.filter((target) => !targetDefinitions[target]);
   if (unknown.length) fail(`不支持的 AI 工具：${unknown.join('、')}`);
+  customDirs.forEach(validateCustomDir);
   return { home, targets: [...new Set(targets)], customDirs: [...new Set(customDirs)] };
 }
 
