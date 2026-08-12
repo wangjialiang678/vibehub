@@ -353,3 +353,25 @@ test('网页合法提交 10 分钟最多 5 次，第 6 次返回可重试提示'
   assert.match(limited.json().error.message, /10 分钟/);
   assert.ok(limited.json().error.retry_after_seconds > 0);
 });
+
+test('限频 guard 节流回收所有项目的过期记录', async () => {
+  let currentTime = 0;
+  const { createSubmissionGuard } = await import('../src/services/submission-guard.js');
+  const guard = createSubmissionGuard({ clock: () => currentTime });
+  for (const projectId of ['expired-a', 'expired-b']) {
+    const permit = guard.acquire(projectId);
+    permit.recordAttempt();
+    permit.release();
+  }
+  assert.equal(guard.snapshot().trackedProjects, 2);
+
+  currentTime = 599_999;
+  guard.acquire('sweep-before-expiry').release();
+  currentTime = 600_001;
+  guard.acquire('throttled-sweep').release();
+  assert.equal(guard.snapshot().trackedProjects, 2, '距离上次扫描不足 60 秒时不应全表扫描');
+
+  currentTime = 660_000;
+  guard.acquire('sweep-after-interval').release();
+  assert.equal(guard.snapshot().trackedProjects, 0);
+});

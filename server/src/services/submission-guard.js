@@ -1,9 +1,11 @@
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
+const SWEEP_INTERVAL_MS = 60 * 1000;
 
 export function createSubmissionGuard({ clock = Date.now } = {}) {
   const active = new Set();
   const attempts = new Map();
+  let lastSweepAt = null;
 
   function recentAttempts(projectId, at) {
     const recent = (attempts.get(projectId) || []).filter((time) => at - time < WINDOW_MS);
@@ -12,9 +14,16 @@ export function createSubmissionGuard({ clock = Date.now } = {}) {
     return recent;
   }
 
+  function sweepExpiredAttempts(at) {
+    if (lastSweepAt !== null && at - lastSweepAt < SWEEP_INTERVAL_MS) return;
+    lastSweepAt = at;
+    for (const projectId of attempts.keys()) recentAttempts(projectId, at);
+  }
+
   return {
     acquire(projectId) {
       const at = clock();
+      sweepExpiredAttempts(at);
       const recent = recentAttempts(projectId, at);
       if (active.has(projectId)) {
         return {
@@ -51,6 +60,9 @@ export function createSubmissionGuard({ clock = Date.now } = {}) {
           active.delete(projectId);
         },
       };
+    },
+    snapshot() {
+      return { activeProjects: active.size, trackedProjects: attempts.size };
     },
   };
 }
