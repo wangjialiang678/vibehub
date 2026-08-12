@@ -1,9 +1,62 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs';
+import {
+  closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync,
+  readdirSync, renameSync, rmSync, statSync, statfsSync, writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { db } from '../lib/db.js';
 import { LIMITS, paths } from '../lib/config.js';
 import { previewLink, versionDir } from './publish.js';
+
+const PRUNE_MANIFEST = 'manifest.json';
+const SAFE_VERSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const SAFE_PREVIEW_ID = /^[a-z0-9]{16}$/;
+
+function fsyncDirectory(directory) {
+  const descriptor = openSync(directory, 'r');
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
+}
+
+function pathEntryExists(path) {
+  try { lstatSync(path); return true; } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function writePruneManifest(directory, manifest) {
+  const temporary = join(directory, `${PRUNE_MANIFEST}.tmp`);
+  writeFileSync(temporary, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+  const file = openSync(temporary, 'r');
+  try { fsyncSync(file); } finally { closeSync(file); }
+  renameSync(temporary, join(directory, PRUNE_MANIFEST));
+  fsyncDirectory(directory);
+}
+
+function readPruneManifest(directory) {
+  const value = JSON.parse(readFileSync(join(directory, PRUNE_MANIFEST), 'utf8'));
+  if (value?.format !== 1 || !SAFE_VERSION_ID.test(value.versionId) || !SAFE_PREVIEW_ID.test(value.previewId)
+      || typeof value.hasVersion !== 'boolean' || typeof value.hasPreview !== 'boolean') {
+    throw new Error('invalid prune manifest');
+  }
+  return value;
+}
+
+function warnRecovery(logger, reason) {
+  logger?.warn?.({ reason }, '产物隔离区未能自动恢复，已保守保留');
+}
+
+function protectedPruneVersions() {
+  const versionIds = new Set();
+  if (!existsSync(paths.tmp)) return { versionIds, invalid: false };
+  for (const entry of readdirSync(paths.tmp, { withFileTypes: true })) {
+    if (!entry.isDirectory()
+        || (!entry.name.startsWith('prune_recovery_') && !entry.name.startsWith('prune_work_'))) continue;
+    try { versionIds.add(readPruneManifest(join(paths.tmp, entry.name)).versionId); }
+    catch { return { versionIds, invalid: true }; }
+  }
+  return { versionIds, invalid: false };
+}
 
 export class ProjectQuotaError extends Error {
   constructor(usedBytes, incomingBytes) {
@@ -55,29 +108,43 @@ export function assertProjectedQuota(projectId, incomingBytes) {
 }
 
 export function pruneProjectArtifacts(projectId, { removeQuarantine = rmSync } = {}) {
+  const protectedState = protectedPruneVersions();
+  if (protectedState.invalid) {
+    return { pruned: 0, failures: [{ version_id: null, error: new Error('unrecoverable prune manifest') }] };
+  }
   const retained = retainedVersionIds(projectId);
   const versions = db.prepare('SELECT id,preview_id FROM versions WHERE project_id=? AND artifact_pruned=0').all(projectId);
   let pruned = 0;
   const failures = [];
   for (const version of versions) {
-    if (retained.has(version.id)) continue;
+    if (retained.has(version.id) || protectedState.versionIds.has(version.id)) continue;
     const versionPath = versionDir(version.id);
     const previewPath = previewLink(version.preview_id);
     const quarantineId = randomUUID();
+    const workQuarantine = join(paths.tmp, `prune_work_${quarantineId}`);
     const quarantine = join(paths.tmp, `prune_recovery_${quarantineId}`);
     const deleteQuarantine = join(paths.tmp, `prune_delete_${quarantineId}`);
-    const quarantinedVersion = join(quarantine, 'version');
-    const quarantinedPreview = join(quarantine, 'preview');
+    let activeQuarantine = workQuarantine;
     let versionMoved = false;
     let previewMoved = false;
     let transactionStarted = false;
     try {
-      mkdirSync(quarantine, { recursive: true });
+      mkdirSync(workQuarantine, { recursive: true });
+      let hasPreview = false;
+      let hasVersion = false;
+      try { lstatSync(previewPath); hasPreview = true; } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      try { lstatSync(versionPath); hasVersion = true; } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      writePruneManifest(workQuarantine, {
+        format: 1, versionId: version.id, previewId: version.preview_id,
+        hasVersion, hasPreview,
+      });
       // lstat 能识别目标已丢失的断链；rename 移动的是链接本身，不会跟随目标。
-      try { lstatSync(previewPath); renameSync(previewPath, quarantinedPreview); previewMoved = true; }
-      catch (error) { if (error?.code !== 'ENOENT') throw error; }
-      try { lstatSync(versionPath); renameSync(versionPath, quarantinedVersion); versionMoved = true; }
-      catch (error) { if (error?.code !== 'ENOENT') throw error; }
+      if (hasPreview) { renameSync(previewPath, join(workQuarantine, 'preview')); previewMoved = true; }
+      if (hasVersion) { renameSync(versionPath, join(workQuarantine, 'version')); versionMoved = true; }
+      fsyncDirectory(workQuarantine);
+      renameSync(workQuarantine, quarantine);
+      activeQuarantine = quarantine;
+      fsyncDirectory(paths.tmp);
 
       // 文件均已可恢复地隔离后，才提交数据库清理标记。
       db.exec('BEGIN IMMEDIATE');
@@ -98,24 +165,70 @@ export function pruneProjectArtifacts(projectId, { removeQuarantine = rmSync } =
       const recoveryErrors = [];
       // 先恢复链接目标，再恢复链接本身；两者均使用同文件系统原子 rename。
       if (versionMoved) {
-        try { renameSync(quarantinedVersion, versionPath); }
+        try { renameSync(join(activeQuarantine, 'version'), versionPath); }
         catch (recoveryError) { recoveryErrors.push(recoveryError); }
       }
       if (previewMoved) {
-        try { renameSync(quarantinedPreview, previewPath); }
+        try { renameSync(join(activeQuarantine, 'preview'), previewPath); }
         catch (recoveryError) { recoveryErrors.push(recoveryError); }
       }
       let recoveryPath = null;
       if (recoveryErrors.length) {
         // 隔离区里仍有唯一副本时绝不能删除，保留受保护名称等待人工/后续恢复。
-        recoveryPath = quarantine;
+        recoveryPath = activeQuarantine;
       } else {
-        try { rmSync(quarantine, { recursive: true, force: true }); } catch { /* 没有唯一副本，可由 cleanupTmp 回收 */ }
+        try { rmSync(activeQuarantine, { recursive: true, force: true }); } catch { /* 没有唯一副本，可由启动恢复回收 */ }
       }
       failures.push({ version_id: version.id, error, recovery_errors: recoveryErrors, recovery_path: recoveryPath });
     }
   }
   return { pruned, failures };
+}
+
+/** 恢复进程中断时遗留的两阶段清理；任何歧义都保守保留唯一副本。 */
+export function recoverPruneQuarantines({ logger = null, removeQuarantine = rmSync } = {}) {
+  const result = { restored: 0, deleted: 0, failures: [] };
+  if (!existsSync(paths.tmp)) return result;
+  const entries = readdirSync(paths.tmp, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory()
+      && (entry.name.startsWith('prune_recovery_') || entry.name.startsWith('prune_work_')));
+  for (const entry of entries) {
+    const quarantine = join(paths.tmp, entry.name);
+    try {
+      const manifest = readPruneManifest(quarantine);
+      const row = db.prepare('SELECT id,preview_id,artifact_pruned FROM versions WHERE id=?').get(manifest.versionId);
+      if (!row || row.preview_id !== manifest.previewId) throw new Error('prune manifest has no matching version');
+      if (row.artifact_pruned) {
+        const deletion = join(paths.tmp, `prune_delete_${randomUUID()}`);
+        renameSync(quarantine, deletion);
+        try { removeQuarantine(deletion, { recursive: true, force: true }); } catch { /* cleanupTmp 后续收敛 */ }
+        result.deleted += 1;
+        continue;
+      }
+
+      const targets = [
+        { present: manifest.hasVersion, quarantined: join(quarantine, 'version'), original: versionDir(row.id) },
+        { present: manifest.hasPreview, quarantined: join(quarantine, 'preview'), original: previewLink(row.preview_id) },
+      ];
+      for (const target of targets) {
+        const inQuarantine = pathEntryExists(target.quarantined);
+        const atOriginal = pathEntryExists(target.original);
+        if (!target.present) {
+          if (inQuarantine) throw new Error('unexpected prune recovery artifact');
+          continue;
+        }
+        if (inQuarantine && atOriginal) throw new Error('prune recovery target already exists');
+        if (!inQuarantine && !atOriginal) throw new Error('prune recovery artifact is missing');
+        if (inQuarantine) renameSync(target.quarantined, target.original);
+      }
+      rmSync(quarantine, { recursive: true, force: true });
+      result.restored += 1;
+    } catch (error) {
+      result.failures.push({ error });
+      warnRecovery(logger, 'recovery_failed');
+    }
+  }
+  return result;
 }
 
 export function cleanupTmp(maxAgeMs = 60 * 60 * 1000) {
@@ -124,7 +237,7 @@ export function cleanupTmp(maxAgeMs = 60 * 60 * 1000) {
   let removed = 0;
   for (const entry of readdirSync(paths.tmp, { withFileTypes: true })) {
     // 清理恢复失败时，这里可能保存着 artifact 的唯一副本，不能按普通临时文件删除。
-    if (entry.name.startsWith('prune_recovery_')) continue;
+    if (entry.name.startsWith('prune_recovery_') || entry.name.startsWith('prune_work_')) continue;
     const target = join(paths.tmp, entry.name);
     try {
       if (statSync(target).mtimeMs >= cutoff) continue;

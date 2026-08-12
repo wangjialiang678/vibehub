@@ -14,7 +14,7 @@ import baasRoutes from './routes/baas.js';
 import { projectSnapshot, diagnosisView } from './routes/_shared.js';
 import { DiagnosisQueue } from './services/diagnosis-queue.js';
 import { probePreviewHttp } from './services/preview-probe.js';
-import { cleanupTmp, diskHealth, pruneProjectArtifacts } from './services/storage.js';
+import { cleanupTmp, diskHealth, pruneProjectArtifacts, recoverPruneQuarantines } from './services/storage.js';
 import { authorizePreviewRequest, createPreviewGrant, previewCookieName } from './services/preview-access.js';
 import { requestUrlForLog } from './lib/preview-claims.js';
 
@@ -54,11 +54,6 @@ function suspendedPage() {
 
 /** 供集成测试使用：构建 app 但不监听真实端口。 */
 export async function buildApp({ probePreview = probePreviewHttp } = {}) {
-  for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
-  cleanupTmp();
-  // 版本保留不是只在有新提交时才生效；服务重启也会收敛历史项目的遗留产物。
-  for (const project of db.prepare('SELECT id FROM projects').all()) pruneProjectArtifacts(project.id);
-
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL || 'info',
@@ -73,6 +68,12 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     },
     bodyLimit: 2 * 1024 * 1024,
   });
+  for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
+  recoverPruneQuarantines({ logger: app.log });
+  cleanupTmp();
+  // 版本保留不是只在有新提交时才生效；服务重启也会收敛历史项目的遗留产物。
+  for (const project of db.prepare('SELECT id FROM projects').all()) pruneProjectArtifacts(project.id);
+
   const diagnosisQueue = new DiagnosisQueue({ probePreview, log: app.log });
   const tmpCleaner = setInterval(() => cleanupTmp(), 10 * 60 * 1000);
   tmpCleaner.unref();

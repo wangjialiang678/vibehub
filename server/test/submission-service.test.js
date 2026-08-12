@@ -1,6 +1,6 @@
 import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,7 +13,7 @@ const { buildApp } = await import('../src/index.js');
 const { db, now } = await import('../src/lib/db.js');
 const { issueToken, resolveToken } = await import('../src/lib/auth.js');
 const { paths } = await import('../src/lib/config.js');
-const { cleanupTmp, pruneProjectArtifacts } = await import('../src/services/storage.js');
+const { cleanupTmp, pruneProjectArtifacts, recoverPruneQuarantines } = await import('../src/services/storage.js');
 const { makePreview } = await import('../src/services/publish.js');
 const {
   SubmissionError,
@@ -93,7 +93,7 @@ function addStoredVersion(f, { seq, previewId }) {
     VALUES (?,?,?,?,?,?,?,?,?,?)`)
     .run(versionId, f.projectId, `v${seq}`, seq, `sha-stored-${sequence}-${seq}`, 32, 1, previewId, f.userId, now());
   makePreview({ previewId, versionId });
-  return { versionId, dir, previewPath: join(paths.previews, previewId) };
+  return { versionId, previewId, dir, previewPath: join(paths.previews, previewId) };
 }
 
 function multipartUploads(files) {
@@ -419,7 +419,71 @@ test('COMMIT 成功后的隔离区删除失败会留下可由 tmp 清理收敛�
   assert.equal(existsSync(deletePath), false);
 });
 
-test('tmp 清理保留恢复隔离区但回收已提交的 work 和 delete 隔离区', () => {
+function simulateInterruptedPrune(stored, { artifactPruned }) {
+  const quarantine = join(paths.tmp, `prune_recovery_restart_${sequence}_${stored.versionId}`);
+  mkdirSync(quarantine, { recursive: true });
+  writeFileSync(join(quarantine, 'manifest.json'), JSON.stringify({
+    format: 1,
+    versionId: stored.versionId,
+    previewId: stored.previewId,
+    hasVersion: true,
+    hasPreview: true,
+  }));
+  renameSync(stored.previewPath, join(quarantine, 'preview'));
+  renameSync(stored.dir, join(quarantine, 'version'));
+  db.prepare('UPDATE versions SET artifact_pruned=? WHERE id=?').run(artifactPruned, stored.versionId);
+  return quarantine;
+}
+
+test('重启恢复 rename 后 COMMIT 前中断的版本目录和预览链接，重复调用幂等', () => {
+  const f = fixture();
+  const stored = addStoredVersion(f, { seq: 43, previewId: `b${String(sequence).padStart(15, '0')}` });
+  const quarantine = simulateInterruptedPrune(stored, { artifactPruned: 0 });
+
+  const first = recoverPruneQuarantines();
+  const second = recoverPruneQuarantines();
+
+  assert.deepEqual(first, { restored: 1, deleted: 0, failures: [] });
+  assert.deepEqual(second, { restored: 0, deleted: 0, failures: [] });
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(stored.versionId).artifact_pruned, 0);
+  assert.equal(existsSync(join(stored.dir, 'index.html')), true);
+  assert.equal(lstatSync(stored.previewPath).isSymbolicLink(), true);
+  assert.equal(existsSync(quarantine), false);
+});
+
+test('重启清除 COMMIT 后改名为 delete 前中断的隔离产物，重复调用幂等', () => {
+  const f = fixture();
+  const stored = addStoredVersion(f, { seq: 44, previewId: `a${String(sequence).padStart(15, '0')}` });
+  const quarantine = simulateInterruptedPrune(stored, { artifactPruned: 1 });
+
+  const first = recoverPruneQuarantines();
+  const second = recoverPruneQuarantines();
+
+  assert.deepEqual(first, { restored: 0, deleted: 1, failures: [] });
+  assert.deepEqual(second, { restored: 0, deleted: 0, failures: [] });
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(stored.versionId).artifact_pruned, 1);
+  assert.equal(existsSync(stored.dir), false);
+  assert.equal(existsSync(stored.previewPath), false);
+  assert.equal(existsSync(quarantine), false);
+});
+
+test('启动恢复遇到原路径冲突时，随后普通 prune 不会标记或删除隔离中的唯一副本', () => {
+  const f = fixture();
+  const stored = addStoredVersion(f, { seq: 45, previewId: `q${String(sequence).padStart(15, '0')}` });
+  const quarantine = simulateInterruptedPrune(stored, { artifactPruned: 0 });
+  mkdirSync(stored.dir, { recursive: true });
+  writeFileSync(join(stored.dir, 'conflict.txt'), 'occupied');
+
+  const recovery = recoverPruneQuarantines();
+  const cleanup = pruneProjectArtifacts(f.projectId);
+
+  assert.equal(recovery.failures.length, 1);
+  assert.equal(cleanup.pruned, 0);
+  assert.equal(db.prepare('SELECT artifact_pruned FROM versions WHERE id=?').get(stored.versionId).artifact_pruned, 0);
+  assert.equal(existsSync(join(quarantine, 'version', 'index.html')), true);
+});
+
+test('tmp 清理保留恢复和 work 隔离区但回收已提交的 delete 隔离区', () => {
   const recovery = join(paths.tmp, 'prune_recovery_keep');
   const work = join(paths.tmp, 'prune_work_old');
   const deletion = join(paths.tmp, 'prune_delete_old');
@@ -432,7 +496,7 @@ test('tmp 清理保留恢复隔离区但回收已提交的 work 和 delete 隔�
   cleanupTmp(0);
 
   assert.equal(existsSync(recovery), true);
-  assert.equal(existsSync(work), false);
+  assert.equal(existsSync(work), true);
   assert.equal(existsSync(deletion), false);
 });
 
