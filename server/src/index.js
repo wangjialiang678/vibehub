@@ -8,6 +8,7 @@ import { db, now } from './lib/db.js';
 import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR, previewOrigin } from './lib/config.js';
 import { authRequired, assertProjectAccess, hasAllowedCookieOrigin } from './lib/auth.js';
 import skillRoutes from './routes/skill.js';
+import submissionRoutes from './routes/submissions.js';
 import adminRoutes from './routes/admin.js';
 import publicRoutes from './routes/public.js';
 import baasRoutes from './routes/baas.js';
@@ -126,6 +127,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   app.get('/api/internal/queue', { preHandler: authRequired(['teacher', 'admin']) }, async () => diagnosisQueue.snapshot());
 
   await app.register(skillRoutes, { diagnosisQueue });
+  await app.register(submissionRoutes, { diagnosisQueue });
   await app.register(adminRoutes);
   await app.register(publicRoutes);
   await app.register(baasRoutes);
