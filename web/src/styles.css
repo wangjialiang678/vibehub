@@ -288,7 +288,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .ai-submit-steps { grid-column: auto; }
 }
 
-@media (max-width: 540px) {
+@media (max-width: 720px) {
   .submit-mode-tabs, .submit-file-options, .submit-form-grid { grid-template-columns: 1fr; }
   .submit-mode-tabs button { min-height: 77px; }
   .submit-panel-intro, .submit-fieldset, .submit-actions { padding-left: 18px; padding-right: 18px; }
