@@ -66,6 +66,8 @@ export async function safeExtract(tgzPath, destDir, { source = null } = {}) {
   mkdirSync(destDir, { recursive: true });
   let totalBytes = 0;
   let fileCount = 0;
+  let scannedBytes = 0;
+  let scannedEntryCount = 0;
   const rejected = [];
   let validation;
   const rejectArchive = (error) => {
@@ -76,6 +78,22 @@ export async function safeExtract(tgzPath, destDir, { source = null } = {}) {
     maxDecompressionRatio: 100,
     filter: (path, entry) => {
       // 校验与落盘分成两遍：任何硬限制都先中止底层解压流，不留异步写盘任务。
+      // tar 的 gzip 层仍会展开被过滤条目的 payload，因此所有条目必须先占用安全预算；
+      // 对外返回的 fileCount/totalBytes 则继续只统计实际接收的产物。
+      scannedEntryCount += 1;
+      if (scannedEntryCount > LIMITS.fileCount) {
+        return rejectArchive(fileCountLimitError());
+      }
+      if (entry.type === 'File') {
+        if (entry.size > LIMITS.singleFileBytes) {
+          return rejectArchive(fileLimitError(path));
+        }
+        scannedBytes += entry.size;
+        if (scannedBytes > LIMITS.unpackedBytes) {
+          return rejectArchive(bundleLimitError());
+        }
+      }
+
       if (entry.type !== 'File' && entry.type !== 'Directory') {
         return rejectArchive(new UnpackError('bundle_invalid', `内容包包含特殊条目：${path}`,
           '请删除符号链接、设备文件或其他特殊文件后重新提交'));
@@ -99,20 +117,10 @@ export async function safeExtract(tgzPath, destDir, { source = null } = {}) {
           '请只提交网页所需的 HTML、CSS、JavaScript 和素材文件'));
       }
 
-      // 目录也会耗尽 inode 与解包时间；上限按所有实际接收条目计数。
+      // 产品统计只包含实际会落盘的条目；安全上限已在过滤前独立检查。
       fileCount += 1;
-      if (fileCount > LIMITS.fileCount) {
-        return rejectArchive(fileCountLimitError());
-      }
-
       if (entry.type === 'File') {
-        if (entry.size > LIMITS.singleFileBytes) {
-          return rejectArchive(fileLimitError(path));
-        }
         totalBytes += entry.size;
-        if (totalBytes > LIMITS.unpackedBytes) {
-          return rejectArchive(bundleLimitError());
-        }
       }
       return true;
     },
