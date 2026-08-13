@@ -535,6 +535,8 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .agent-row { margin-top: 25px; display: flex; flex-wrap: wrap; gap: 8px; }
 .agent-row span { padding: 7px 11px; border: 1px solid var(--line); border-radius: 99px; color: var(--ink-soft); background: var(--surface); font-size: 12px; }
 .install-card { padding: 10px; }
+.install-status { position: fixed; z-index: 30; top: 18px; left: 50%; min-height: 1px; transform: translateX(-50%); }
+.install-status:not(:empty) { padding: 11px 16px; border-radius: 8px; color: #fff; background: var(--ink); box-shadow: 0 10px 28px rgba(24,23,21,.2); font-size: 13px; }
 .platform-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
 .platform-tabs button { min-width: 104px; padding: 10px 15px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; font-weight: 700; }
 .platform-tabs button.is-active { color: var(--ink); background: var(--surface-soft); box-shadow: inset 0 0 0 1px var(--line); }
@@ -544,6 +546,12 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .install-terminal-hint { padding: 10px 13px 5px; color: var(--ink-soft); font-size: 12px; }
 .install-terminal-hint code { color: var(--ink); font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
 .install-terminal-hint a { margin-left: 3px; color: var(--coral-deep); font-weight: 650; }
+.install-ai-copy { margin: 8px 3px 0; padding: 17px 13px 9px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--line); }
+.install-ai-copy strong { font-size: 14px; }
+.install-ai-copy p { margin-top: 5px; color: var(--ink-soft); font-size: 12px; line-height: 1.6; }
+.install-ai-copy .button { flex: 0 0 auto; }
+.install-ai-prompt { margin: 5px 13px 9px; padding: 13px 15px; border-radius: 7px; color: var(--ink-soft); background: var(--surface-soft); font-size: 12px; line-height: 1.65; }
+.install-ai-prompt code { overflow-wrap: anywhere; white-space: normal; }
 .install-steps { margin: 52px 0 62px; display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
 .install-steps article { min-height: 220px; padding: 27px 29px; display: grid; grid-template-columns: auto 1fr; align-content: start; gap: 17px; }
 .install-steps article + article { border-left: 1px solid var(--line-strong); }
@@ -662,5 +670,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .install-hero h1 { font-size: 52px; }
   .install-command { align-items: stretch; flex-direction: column; padding: 19px; }
   .install-command .button { width: 100%; }
+  .install-ai-copy { align-items: stretch; flex-direction: column; }
+  .install-ai-copy .button { width: 100%; }
   .install-footer { align-items: start; flex-direction: column; }
 }

@@ -45,3 +45,4 @@ var/
 versions/
 web/dist/
 web/node_modules/
+web/public/downloads/vibehub-skill/

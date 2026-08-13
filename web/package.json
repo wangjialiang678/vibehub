@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node ../skill/scripts/build-distribution.mjs --out ./public/downloads/vibehub-skill",
     "dev": "vite",
+    "prebuild": "node ../skill/scripts/build-distribution.mjs --out ./public/downloads/vibehub-skill",
     "build": "tsc -b && vite build",
+    "pretest": "node ../skill/scripts/build-distribution.mjs --out ./public/downloads/vibehub-skill",
     "test": "vitest run"
   },
   "dependencies": {
