@@ -7,6 +7,7 @@ import { copyToClipboard } from './components/Ui';
 import { ApiError } from './lib/api';
 import { getProjectStatus } from './lib/presentation';
 import type { ProjectSnapshot } from './lib/types';
+import { buildVibeHubDeployPrompt } from './lib/vibehubDeployPrompt';
 import {
   StudentDashboard,
   StudentSubmissionHeadingActions,
@@ -158,6 +159,8 @@ describe('学员邀请码转发说明', () => {
 
   it('每个邀请码生成独立文案，并包含地址、双提交方式和独立性提醒', () => {
     const messages = buildStudentInviteMessages(codes, '暑期创造营', origin);
+    const firstAiPrompt = buildVibeHubDeployPrompt(origin, codes[0]);
+    const secondAiPrompt = buildVibeHubDeployPrompt(origin, codes[1]);
     expect(messages).toHaveLength(2);
     expect(messages[0]).toContain('暑期创造营');
     expect(messages[0]).toContain(`${origin}/login`);
@@ -171,13 +174,13 @@ describe('学员邀请码转发说明', () => {
     expect(messages[0]).toContain('HTML、ZIP 或网页文件夹');
     expect(messages[0]).toContain('AI 助手');
     expect(messages[0]).toContain(`${origin}/install`);
-    expect(messages[0]).toContain('macOS');
-    expect(messages[0]).toContain('Windows');
-    expect(messages[0]).toContain('WorkBuddy');
-    expect(messages[0]).toContain('Codex');
-    expect(messages[0]).toContain('其他 Agent');
-    expect(messages[0]).toContain('使用邀请码加入 VibeHub');
-    expect(messages[0]).toContain('部署我的游戏');
+    expect(messages[0]).toContain(firstAiPrompt);
+    expect(messages[1]).toContain(secondAiPrompt);
+    expect(firstAiPrompt.match(/STUDENT-ONE/g)).toHaveLength(1);
+    expect(secondAiPrompt.match(/STUDENT-TWO/g)).toHaveLength(1);
+    expect(messages[0]).toContain('manifest.json');
+    expect(messages[0]).toContain('install.mjs');
+    expect(messages[0]).not.toMatch(/shell|PowerShell|node --version|\bnpm\b|SkillHub/i);
   });
 
   it('未生成邀请码前也渲染两套可转发说明，只使用当前营地、公开地址和占位码', () => {
@@ -193,14 +196,21 @@ describe('学员邀请码转发说明', () => {
     expect(browserGuide).toContain('CAMP-XXXX');
     expect(browserGuide).toContain(`${origin}/login`);
     expect(browserGuide).toContain('网页 HTML、ZIP 或网页文件夹');
+    expect(browserGuide).toBe([
+      '欢迎加入「星际创造营」！',
+      '',
+      '网页登录并提交游戏：',
+      `1. 打开 ${origin}/login`,
+      '2. 输入你自己的邀请码：CAMP-XXXX',
+      '3. 登录后点击“提交我的游戏”。',
+      '4. 上传网页 HTML、ZIP 或网页文件夹。',
+      '每人一码，不可互换或与他人共用。',
+    ].join('\n'));
     expect(aiGuide).toContain(`${origin}/install`);
-    expect(aiGuide).toContain('macOS');
-    expect(aiGuide).toContain('Windows');
-    expect(aiGuide).toContain('WorkBuddy');
-    expect(aiGuide).toContain('Codex');
-    expect(aiGuide).toContain('其他 Agent');
-    expect(aiGuide).toContain('使用邀请码加入 VibeHub');
-    expect(aiGuide).toContain('部署我的游戏');
+    expect(aiGuide).toContain(buildVibeHubDeployPrompt(origin, 'CAMP-XXXX'));
+    expect(aiGuide.match(/CAMP-XXXX/g)).toHaveLength(1);
+    expect(aiGuide).toContain('manifest.json');
+    expect(aiGuide).not.toMatch(/shell|PowerShell|node --version|\bnpm\b|SkillHub/i);
     expect(`${browserGuide}${aiGuide}`).not.toMatch(/深圳|STUDENT-ONE|hub\.supermind-ai\.cn/);
     expect(html).toContain('发给学员的使用说明');
     expect(html).toContain('复制网页登录说明');
@@ -227,12 +237,12 @@ describe('学员邀请码转发说明', () => {
     expect(student).toContain('aria-label="复制第 2 位学员的说明"');
     expect(student).toContain(`${origin}/login`);
     expect(student).toContain(`${origin}/install`);
-    expect(student).toContain('使用邀请码加入 VibeHub');
+    expect(student).toContain('manifest.json');
     expect(student).toContain('部署我的游戏');
     expect(teacher).not.toContain('复制发给学员的说明');
     expect(teacher).not.toContain(`${origin}/login`);
     expect(teacher).not.toContain(`${origin}/install`);
-    expect(teacher).not.toContain('使用邀请码加入 VibeHub');
+    expect(teacher).not.toContain('manifest.json');
     expect(teacher).not.toContain('部署我的游戏');
   });
 
@@ -241,6 +251,7 @@ describe('学员邀请码转发说明', () => {
     expect(source).toContain('setRevealedRole(input.role)');
     expect(source).toContain('VITE_PUBLIC_APP_URL');
     expect(source).toContain('publicAppBaseUrl(');
+    expect(source).toContain("import { buildVibeHubDeployPrompt } from '../lib/vibehubDeployPrompt';");
     expect(source).toContain('role="status"');
     expect(source.indexOf('<TeacherStudentGuide')).toBeGreaterThan(-1);
     expect(source.indexOf('<TeacherStudentGuide')).toBeLessThan(source.indexOf('<section className="panel invite-reveal"'));

@@ -7,6 +7,7 @@ import { PageState, StatusPill, copyToClipboard } from '../components/Ui';
 import { api, readableError } from '../lib/api';
 import { formatDateTime } from '../lib/presentation';
 import type { InviteListItem } from '../lib/types';
+import { buildVibeHubDeployPrompt } from '../lib/vibehubDeployPrompt';
 
 type InviteRole = 'student' | 'teacher';
 type StudentGuideKind = 'browser' | 'ai';
@@ -41,11 +42,11 @@ export function buildStudentAiGuide(campName: string, origin: string, code = STU
     `欢迎加入「${campName}」！`,
     '',
     '使用 AI 助手部署游戏：',
-    `1. 在 WorkBuddy、Codex 或其他 Agent 中打开官方安装页：${baseUrl}/install`,
-    '2. 让 AI 根据你的电脑选择 macOS 或 Windows 指令安装 VibeHub 部署 Skill。',
-    '3. 安装完成后，对 AI 说“使用邀请码加入 VibeHub”，并提供你自己的邀请码：',
-    code,
-    '4. 在游戏项目目录里对 AI 说“部署我的游戏”。',
+    `官网安装说明：${baseUrl}/install`,
+    '把下面整段话发给 WorkBuddy、Codex 或其他 Agent：',
+    '',
+    buildVibeHubDeployPrompt(baseUrl, code),
+    '',
     '每人一码，不可互换或与他人共用。',
   ].join('\n');
 }

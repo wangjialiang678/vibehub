@@ -3,23 +3,19 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  InstallPageView,
-  buildAiInstallPrompt,
-  buildInstallCommand,
-  copyInstallText,
-} from './pages/InstallPage';
+import { buildVibeHubDeployPrompt } from './lib/vibehubDeployPrompt';
+import { InstallPageView, copyInstallText } from './pages/InstallPage';
 
 const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 const page = readFileSync(new URL('./pages/InstallPage.tsx', import.meta.url), 'utf8');
 const login = readFileSync(new URL('./pages/LoginPage.tsx', import.meta.url), 'utf8');
 
-function render(platform: 'macOS' | 'Windows') {
+function render() {
   const originalError = console.error;
   console.error = () => undefined;
   try {
     return renderToStaticMarkup(createElement(MemoryRouter, null,
-      createElement(InstallPageView, { initialPlatform: platform, origin: 'https://hub.example.test' })));
+      createElement(InstallPageView, { origin: 'https://hub.example.test' })));
   } finally {
     console.error = originalError;
   }
@@ -33,74 +29,49 @@ describe('学生安装部署 Skill', () => {
     expect(login).toContain('to="/install"');
   });
 
-  it('只使用 VibeHub 同源安装资源，不依赖外部包发布渠道', () => {
-    expect(page).not.toMatch(/VITE_SKILL_INSTALL_COMMAND|npx|npm|SkillHub|即将开放/i);
-    expect(page).toContain('/downloads/vibehub-skill/install.mjs');
-    expect(page).toContain('复制给 AI');
-    expect(page).toContain('node --version');
-    expect(page).not.toMatch(/深圳|上海|CAMP-[A-Z0-9]+/i);
-  });
+  it('只显示共享的自然语言提示词和唯一主按钮', () => {
+    const prompt = buildVibeHubDeployPrompt('https://hub.example.test');
+    const html = render();
 
-  it('macOS 显示 curl 命令，并把同源分发根传给安装器', () => {
-    const command = buildInstallCommand('macOS', 'https://hub.example.test');
-    expect(command).toContain('curl --fail --silent --show-error --location');
-    expect(command).toContain('https://hub.example.test/downloads/vibehub-skill/install.mjs');
-    expect(command).toContain('node "$tmp" --base-url "https://hub.example.test/downloads/vibehub-skill/"');
-
-    const html = render('macOS');
-    expect(html).toContain('aria-pressed="true"');
-    expect(html).toContain('curl --fail');
-    expect(html).toContain('终端 Terminal');
+    expect(html).toContain('复制这段话给 AI');
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).toContain('VibeHub Deploy');
+    expect(html).toContain('https://hub.example.test/downloads/vibehub-skill/');
+    for (const paragraph of prompt.split('\n\n')) expect(html).toContain(paragraph);
+    expect(html).toContain('href="/login"');
+    expect(html).toContain('直接网页登录提交');
     expect(html).toContain('role="status"');
   });
 
-  it('Windows 显示 PowerShell 命令，并把同源分发根传给安装器', () => {
-    const command = buildInstallCommand('Windows', 'https://hub.example.test');
-    expect(command).toContain('Invoke-WebRequest');
-    expect(command).toContain("'https://hub.example.test/downloads/vibehub-skill/install.mjs'");
-    expect(command).toContain("--base-url 'https://hub.example.test/downloads/vibehub-skill/'");
+  it('源码和页面都没有旧平台切换、命令安装或内部渠道内容', () => {
+    const html = render();
+    const forbidden = /buildInstallCommand|platform-tabs|shell|PowerShell|node --version|\bnpm\b|SkillHub|深圳|上海/i;
 
-    const html = render('Windows');
-    expect(html).toContain('PowerShell');
-    expect(html).toContain('Invoke-WebRequest');
-    expect(html).toContain('role="status"');
+    expect(page).not.toMatch(forbidden);
+    expect(html).not.toMatch(forbidden);
+    expect(page).not.toContain('/downloads/vibehub-skill/install.mjs');
+    expect(html).not.toContain('复制命令');
   });
 
-  it('复制当前平台的精确命令，并报告成功和失败', async () => {
-    const command = buildInstallCommand('Windows', 'https://hub.example.test');
+  it('复制共享 builder 的精确提示词，并报告成功和失败', async () => {
+    const prompt = buildVibeHubDeployPrompt('https://hub.example.test');
     const copy = vi.fn(async () => undefined);
     const setNotice = vi.fn();
-    await copyInstallText(command, '安装命令已复制', copy, setNotice);
-    expect(copy).toHaveBeenCalledWith(command);
-    expect(setNotice).toHaveBeenCalledWith('安装命令已复制');
+
+    await copyInstallText(prompt, '这段话已复制，可以粘贴给 AI 了', copy, setNotice);
+    expect(copy).toHaveBeenCalledWith(prompt);
+    expect(setNotice).toHaveBeenCalledWith('这段话已复制，可以粘贴给 AI 了');
 
     copy.mockRejectedValueOnce(new Error('denied'));
-    await copyInstallText(command, '安装命令已复制', copy, setNotice);
+    await copyInstallText(prompt, '这段话已复制，可以粘贴给 AI 了', copy, setNotice);
     expect(setNotice).toHaveBeenLastCalledWith('复制失败，请手动选中文字复制');
   });
 
-  it('复制给 AI 的说明包含官方安装页但不含真实邀请码或城市', async () => {
-    const prompt = buildAiInstallPrompt('https://hub.example.test');
-    expect(prompt).toContain('https://hub.example.test/install');
-    expect(prompt).toContain('macOS');
-    expect(prompt).toContain('Windows');
-    expect(prompt).toContain('向我询问营地邀请码');
-    expect(prompt).not.toMatch(/深圳|上海|CAMP-[A-Z0-9]+/i);
-
-    const copy = vi.fn(async () => undefined);
-    const setNotice = vi.fn();
-    await copyInstallText(prompt, '给 AI 的说明已复制', copy, setNotice);
-    expect(copy).toHaveBeenCalledWith(prompt);
-    expect(render('macOS')).toContain('复制给 AI');
-  });
-
-  it('把安装、邀请码接入和部署作品分成三步，并说明 Node 20 要求', () => {
-    const html = render('macOS');
-    expect(html).toContain('安装部署助手');
-    expect(html).toContain('输入邀请码');
-    expect(html).toContain('部署游戏');
-    expect(html).toContain('Node.js 20');
-    expect(html).toContain('Codex');
-    expect(html).toContain('WorkBuddy');
+  it('保留复制、粘贴给 AI、提供邀请码并部署的三步说明', () => {
+    const html = render();
+    expect(html).toContain('复制这段话');
+    expect(html).toContain('粘贴给 AI');
+    expect(html).toContain('提供邀请码并部署');
+    expect(html.match(/<article/g)).toHaveLength(3);
   });
 });
