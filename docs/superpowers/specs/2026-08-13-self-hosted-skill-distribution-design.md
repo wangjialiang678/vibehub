@@ -5,6 +5,8 @@ status: approved-concept
 audience: product, tech
 ---
 
+> **2026-08-13 更新：** 学生端的 macOS/Windows 命令界面已由 [VibeHub Deploy AI 提示词设计](2026-08-13-vibehub-deploy-ai-prompt-design.md) 取代。当前 `/install` 只提供一段自然语言给 AI；展示名为 **VibeHub Deploy**、技术名为 `vibehub-deploy`。本文件以下命令式页面内容仅保留为历史决策记录，不再用于实现或发布验收。
+
 # 目标
 
 让学员在 macOS 或 Windows 上安装 VibeHub 网页作品部署 Skill，不依赖 npm registry，也不依赖超脑 SkillHub。学员不需要注册第三方账号；VibeHub 自己负责提供安装入口、版本清单和 Skill 文件。

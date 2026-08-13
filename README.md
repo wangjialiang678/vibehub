@@ -2,9 +2,9 @@
 
 **给零基础学员一条「作品从做出来到公开上线」的完整通道，给老师一个「看得见、审得了、能汇总」的管理台。**
 
-面向 Vibe Coding 教学、主题征集和 AI 黑客松场景的中心化管理、审核、部署与展示平台。学员安装一次通用 VibeHub Skill，再用邀请码把自己习惯的 AI 工具（Claude Code / Codex / WorkBuddy）连到任意营地；写完后让 AI 部署，就能拿到预览地址。老师在审核队列里预览、通过或退回；通过的作品拿到自己的网址和二维码，并汇入课程作品集合页。
+面向 Vibe Coding 教学、主题征集和 AI 黑客松场景的中心化管理、审核、部署与展示平台。学员从 VibeHub 官网复制一段自然语言给自己习惯的 AI 工具（Claude Code / Codex / WorkBuddy），由 AI 安装 **VibeHub Deploy**，再用邀请码连到任意营地；写完后让 AI 部署，就能拿到预览地址。老师在审核队列里预览、通过或退回；通过的作品拿到自己的网址和二维码，并汇入课程作品集合页。
 
-> 状态：核心黄金路径、学员网页直传、通用 Skill、跨平台安装页、多营地连接和老师端学员说明均已实现。
+> 状态：核心黄金路径、学员网页直传、VibeHub Deploy 自然语言安装入口、多营地连接和老师端学员说明均已实现。
 
 ---
 
@@ -35,14 +35,16 @@ npm install
 npm run dev
 ```
 
-开发服务器会通过同源代理转发到默认后端 `http://127.0.0.1:4300`，以保留 host-only 会话 cookie；用 `VITE_API_BASE` 可覆盖代理目标。部署时该变量指定浏览器请求的 API 地址，`VITE_PUBLIC_APP_URL` 指定老师转发给学员的公开登录与安装地址。`npm run dev`、`npm test` 和 `npm run build` 会先把 Skill 的白名单文件、完整性清单和在线安装器生成到前端静态资源中；学生安装不依赖 npm 包发布或 SkillHub。页面入口为 `/app`、`/admin`、`/c/:campSlug`、`/login` 和 `/install`。
+开发服务器会通过同源代理转发到默认后端 `http://127.0.0.1:4300`，以保留 host-only 会话 cookie；用 `VITE_API_BASE` 可覆盖代理目标。部署时该变量指定浏览器请求的 API 地址，`VITE_PUBLIC_APP_URL` 指定老师转发给学员的公开登录与安装地址。`npm run dev`、`npm test` 和 `npm run build` 会先把 Skill 的白名单文件、完整性清单和在线安装器生成到前端静态资源中。学生唯一需要知道的公开安装源是 VibeHub 官网。页面入口为 `/app`、`/admin`、`/c/:campSlug`、`/login` 和 `/install`。
 
 ## 学员提交与 Skill 安装
 
 - 已有 HTML、ZIP 或网页文件夹：打开 `/login`，用老师发放的个人邀请码登录，再从“提交我的游戏”直接上传。
-- 使用 Codex、Claude Code、WorkBuddy 或兼容 Agent：打开 `/install`，按 macOS 或 Windows 指令安装 VibeHub Skill，再让 AI “使用邀请码加入 VibeHub”并“部署我的游戏”。
-- `/install` 从 VibeHub HTTPS 静态资源下载安装清单和固定白名单文件；在线安装器在执行本地安装器前逐个核对大小与 SHA-256，失败时不替换已有 Skill。
+- 使用 Codex、Claude Code、WorkBuddy 或兼容 Agent：打开 `/install`，只需复制页面上的自然语言给 AI。AI 会识别系统与 Agent、安装 VibeHub Deploy、询问个人邀请码，并在学员明确说“部署我的游戏”后提交。学员不复制、不执行终端命令。
+- VibeHub Deploy 的技术标识和安装目录名是 `vibehub-deploy`，展示名是 **VibeHub Deploy**。官网仍通过旧公开路径 `/downloads/vibehub-skill/` 发布清单与白名单文件，以保持已发出链接兼容；在线安装器会核对大小与 SHA-256，失败时不替换已有 Skill。
 - 老师登录管理端的邀请码页面后，可随时复制上述两种通用说明；生成学员邀请码后，还可复制只包含该学员个人邀请码的完整说明。老师角色邀请码的生成结果不会生成绑定该码的学员转发文案。
+
+超脑 SkillHub 只保留同一提交的独立内部镜像：它不是学生安装链路，失败不阻塞官网发布，两个渠道也不在学生文案或入口中互相引流。
 
 ## 核心设计要点
 

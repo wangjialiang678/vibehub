@@ -413,9 +413,9 @@ Codex 的独立方案主张 **P0 服务端完全不执行学员的任何 JavaScr
 
 ### 6.1 分发形态
 
-一个仓库同时满足三家 AI 工具：
+一份 VibeHub Deploy 源码同时满足三家 AI 工具：
 ```
-vibehub-skill/
+vibehub-deploy/
 ├── SKILL.md          # 三家 Agent 共用的提示词与操作流程
 ├── AGENTS.md         # 兼容读取 AGENTS.md 的工具
 ├── agents/openai.yaml
@@ -425,16 +425,21 @@ vibehub-skill/
 ├── distribution-files.mjs # 公开分发白名单
 └── lib/platform.mjs  # macOS / Windows 系统命令差异
 ```
-学生侧的当前主渠道是：
+学生侧的公开安装链路是：
 
 ```text
-/install → VibeHub HTTPS 静态资源 → manifest 白名单/字节数/SHA-256 校验
-         → 已验证的本地安装器 → Agent 个人 Skill 目录
+/install 自然语言 → 学员复制给 AI → AI 访问 VibeHub 官网静态分发源
+             → manifest 白名单/字节数/SHA-256 校验 → 已验证的本地安装器
+             → Agent 个人 `skills/vibehub-deploy` 目录
 ```
 
-`web` 的开发、测试和构建前步骤会调用分发生成器，只复制固定白名单中的运行文件，并生成 `manifest.json`。下载引导程序拒绝跳转、非 HTTPS 生产来源、未知或重复路径、超限内容以及哈希不符的文件；全部文件验证后才用 Node 调用现有 `bin/install.mjs`，并总是清理下载暂存目录。
+`/install` 的唯一主操作是“复制这段话给 AI”。学员只看到自然语言，不看到或执行 shell、PowerShell、Node 或 npm 命令。提示词要求 AI 只使用当前 VibeHub 公开 origin 下的 `/downloads/vibehub-skill/`，读取 `manifest.json` 和 `install.mjs`，自行识别 macOS/Windows 与当前 Agent，完成安装后询问邀请码，并仅在学员明确要求部署时提交作品。
 
-macOS 和 Windows 在 `/install` 分别获得 shell 和 PowerShell 命令，都使用同一份 VibeHub 自托管产物。本地安装器把 Skill 分别放到 Codex、Claude Code 与 WorkBuddy 的个人 Skill 目录；可用 `--targets` 只安装指定工具，其他兼容 `SKILL.md` 的 Agent 可用 `--dir` 指定完整目录。更新时先在目标同级暂存完整新版本并验证文件，再把原目录移到 `~/.vibehub/skill-backups/` 下的时间戳备份，最后原子换入新目录；失败时恢复原目录并清理暂存目录。备份不留在 Agent 的 Skill 扫描目录里。学生安装链路不经过 npm 包发布或超脑 SkillHub；SkillHub 如保留镜像，也只是内部存档。
+`web` 的开发、测试和构建前步骤会调用分发生成器，只复制固定白名单中的运行文件，并生成 `manifest.json`。下载引导程序拒绝跳转、非 HTTPS 生产来源、未知或重复路径、超限内容以及哈希不符的文件；全部文件验证后才用 Node 调用现有 `bin/install.mjs`，并总是清理下载暂存目录。技术标识为 `vibehub-deploy`，展示名为 **VibeHub Deploy**；官网分发 URL 继续保留旧路径 `/downloads/vibehub-skill/`，避免已分发的链接失效。
+
+本地安装器把 Skill 分别放到 Codex、Claude Code 与 WorkBuddy 的个人 `skills/vibehub-deploy` 目录；可用 `--targets` 只安装指定工具，其他兼容 `SKILL.md` 的 Agent 可用 `--dir` 指定完整目录。更新时先在目标同级暂存完整新版本并验证文件，再把原目录移到 `~/.vibehub/skill-backups/` 下的时间戳备份，最后原子换入新目录；失败时恢复原目录并清理暂存目录。备份不留在 Agent 的 Skill 扫描目录里。
+
+超脑 SkillHub 是独立维护的内部镜像，与官网公开分发不存在运行时依赖：镜像失败不阻塞官网构建、发布或安装，官网失败也不自动切换到镜像。两个渠道不互相引流，SkillHub 名称、入口、团队口令或 token 不得出现在官网学生页、自然语言提示词和老师转发文案中。
 
 ### 6.2 握手时序
 
@@ -539,9 +544,9 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 老师登录管理端的邀请码页后，始终能看到两条可复制的学员路径：
 
 - 网页登录：打开 `/login`，输入个人邀请码，再上传 HTML、ZIP 或网页文件夹。
-- AI 部署：打开 `/install`，由 AI 根据 macOS/Windows 安装 Skill，然后说“使用邀请码加入 VibeHub”和“部署我的游戏”。
+- AI 部署：打开 `/install`，复制页面上唯一的自然语言给 AI，由 AI 安装 VibeHub Deploy、询问个人邀请码，并在学员说“部署我的游戏”后提交。
 
-通用说明使用 `CAMP-XXXX` 占位符，不写死城市、营地或生产域名。新生成学员邀请码后，每份转发文案只替换为对应学员的一个明码；刷新后不从脱敏历史恢复。生成老师角色邀请码时，生成结果只提供原始邀请码/导出操作，不生成绑定该码的学员转发文案；上方通用指南仍然可见。复制成功或失败都通过可访问的状态提示反馈，邀请码不写入日志或持久化的前端状态。
+通用说明使用 `CAMP-XXXX` 占位符，不写死城市、营地或生产域名，也不提内部镜像。新生成学员邀请码后，每份转发文案只替换为对应学员的一个明码；刷新后不从脱敏历史恢复。生成老师角色邀请码时，生成结果只提供原始邀请码/导出操作，不生成绑定该码的学员转发文案；上方通用指南仍然可见。复制成功或失败都通过可访问的状态提示反馈，邀请码不写入日志或持久化的前端状态。
 
 ---
 
