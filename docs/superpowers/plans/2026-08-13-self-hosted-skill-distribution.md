@@ -346,7 +346,7 @@ Request spec compliance review, then code-quality/security review. Require atten
 
 - [ ] **Step 5: Merge and publish**
 
-Merge the isolated branch into main without overwriting unrelated Shanghai-camp changes. Push main. Build the console with `VITE_API_BASE` and `VITE_PUBLIC_APP_URL` only; deploy it atomically to `/var/www/vibehub-console`. The server does not require a new release unless review changes server runtime code.
+Merge the isolated branch into main without overwriting unrelated Shanghai-camp changes. Push main. Build the console with `VITE_API_BASE` and `VITE_PUBLIC_APP_URL` only; upload to a timestamped `/var/www/vibehub-console-releases/<release>` directory and atomically switch the `/var/www/vibehub-console` symlink. Keep the previous static release for rollback. The server does not require a new release unless review changes server runtime code.
 
 - [ ] **Step 6: Production probes**
 

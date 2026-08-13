@@ -11,7 +11,8 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assertSafeDistributionPath,
@@ -20,6 +21,9 @@ import {
 } from '../distribution-files.mjs';
 
 const skillRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = resolve(skillRoot, '..');
+const publicOutput = resolve(repoRoot, 'web', 'public', 'downloads', 'vibehub-skill');
+const testOutputPrefixes = ['vh-skill-dist-', 'vh-skill-hosted-dist-'];
 
 function canonicalizeProposedPath(filePath) {
   const missingParts = [];
@@ -39,14 +43,12 @@ function parseOutput(args) {
   }
   const output = resolve(args[1]);
   const canonicalOutput = canonicalizeProposedPath(output);
-  const canonicalSkillRoot = realpathSync(skillRoot);
-  const skillFromOutput = relative(canonicalOutput, canonicalSkillRoot);
-  const outputFromSkill = relative(canonicalSkillRoot, canonicalOutput);
-  const outputContainsSkill = skillFromOutput === ''
-    || (!skillFromOutput.startsWith('..') && !isAbsolute(skillFromOutput));
-  const outputIsInsideSkill = outputFromSkill === ''
-    || (!outputFromSkill.startsWith('..') && !isAbsolute(outputFromSkill));
-  if (canonicalOutput === parse(canonicalOutput).root || outputContainsSkill || outputIsInsideSkill) {
+  const canonicalPublicOutput = canonicalizeProposedPath(publicOutput);
+  const canonicalTmp = realpathSync(tmpdir());
+  const isPublicOutput = canonicalOutput === canonicalPublicOutput;
+  const isDedicatedTestOutput = dirname(canonicalOutput) === canonicalTmp
+    && testOutputPrefixes.some((prefix) => basename(canonicalOutput).startsWith(prefix));
+  if (!isPublicOutput && !isDedicatedTestOutput) {
     throw new Error(`拒绝清空不安全的输出目录：${output}`);
   }
   return output;

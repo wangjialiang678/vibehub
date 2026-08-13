@@ -108,7 +108,8 @@ npm ci
 VITE_API_BASE=https://hub.supermind-ai.cn \
 VITE_PUBLIC_APP_URL=https://hub.supermind-ai.cn \
 npm run build
-rsync -az --delete ./dist/ <deploy-user>@<server>:/tmp/vibehub-console/
+release_id="$(date -u +%Y%m%d-%H%M%S)"
+rsync -az --delete ./dist/ <deploy-user>@<server>:/tmp/vibehub-console-${release_id}/
 ```
 
 构建后、同步前确认分发产物齐全：
@@ -119,11 +120,17 @@ test -f dist/downloads/vibehub-skill/manifest.json
 node -e "const m=require('./dist/downloads/vibehub-skill/manifest.json'); if (!m.files?.length) process.exit(1)"
 ```
 
-在服务器上将产物放到 nginx 的实际根目录：
+在服务器上把整套控制台产物写入新的时间戳目录，完成后再原子切换 nginx 使用的软链接。`manifest.json` 与它列出的 Skill 文件会随整套控制台一次生效，更新窗口不会出现跨版本哈希不一致：
 
 ```bash
-sudo rsync -a --delete /tmp/vibehub-console/ /var/www/vibehub-console/
+release_id=<与上传时相同的时间戳>
+sudo install -d -m 0755 /var/www/vibehub-console-releases
+sudo mv /tmp/vibehub-console-${release_id} /var/www/vibehub-console-releases/${release_id}
+sudo ln -sfn /var/www/vibehub-console-releases/${release_id} /var/www/vibehub-console.next
+sudo mv -Tf /var/www/vibehub-console.next /var/www/vibehub-console
 ```
+
+发布后保留当前版和至少一个上一版。需要回滚时，对上一版目录重复 `ln -sfn` 与 `mv -Tf` 两步即可；确认线上探针全部通过后再清理更旧的静态 release。不要再向 `/var/www/vibehub-console/` 原地 `rsync --delete`。
 
 ## 5. 安装 nginx 配置
 

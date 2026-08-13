@@ -328,6 +328,26 @@ test('自托管分发拒绝通过符号链接把输出目录指回 Skill 源码'
   }
 });
 
+test('自托管分发拒绝清空仓库外的宽目录并保留哨兵文件', async () => {
+  const unsafeRoot = mkdtempSync(join(tmpdir(), 'vh-unsafe-wide-'));
+  const sentinel = join(unsafeRoot, 'must-survive.txt');
+  writeFileSync(sentinel, 'keep');
+
+  try {
+    const generated = await run(process.execPath, [
+      join(skillRoot, 'scripts/build-distribution.mjs'),
+      '--out',
+      unsafeRoot,
+    ], { cwd: repoRoot, env: { ...process.env } });
+
+    assert.notEqual(generated.code, 0);
+    assert.match(generated.stderr, /拒绝清空不安全的输出目录/);
+    assert.equal(readFileSync(sentinel, 'utf8'), 'keep');
+  } finally {
+    rmSync(unsafeRoot, { recursive: true, force: true });
+  }
+});
+
 test('在线安装从真实 HTTP 分发下载精确七个文件、转发参数并清理临时目录', async (t) => {
   const fixture = await createHostedFixture(t);
   const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-home-'));
