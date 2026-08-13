@@ -432,6 +432,17 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .invite-create input, .invite-create select { width: 100%; min-height: 43px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 7px; outline: 0; color: var(--ink); background: #fff; font-size: 14px; }
 .invite-create input:focus, .invite-create select:focus { border-color: var(--coral); box-shadow: 0 0 0 3px var(--coral-soft); }
 .invite-create .button { margin-top: 26px; }
+.student-guide { overflow: hidden; }
+.student-guide > header { min-height: 104px; padding: 23px 25px 19px; display: flex; align-items: start; justify-content: space-between; gap: 15px; border-bottom: 1px solid var(--line); }
+.student-guide > header h2 { margin-top: 8px; font-size: 21px; letter-spacing: -.035em; }
+.student-guide > header > span { max-width: 270px; color: var(--ink-soft); font-size: 11px; line-height: 1.55; text-align: right; }
+.student-guide-grid { padding: 20px 25px 25px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.student-guide-card { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: 9px; background: #fdfbf8; }
+.student-guide-card > div strong, .student-guide-card > div span { display: block; }
+.student-guide-card > div strong { font-size: 14px; }
+.student-guide-card > div span { margin-top: 5px; color: var(--ink-soft); font-size: 11px; }
+.student-guide-card pre { min-height: 262px; max-height: 340px; overflow: auto; margin: 14px 0; padding: 14px; border-radius: 7px; color: var(--ink); background: var(--surface-soft); font: 11px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
+.student-guide-card .button { width: 100%; }
 .invite-reveal { padding-bottom: 20px; }
 .invite-reveal pre { min-height: 100px; max-height: 220px; overflow: auto; margin: 19px 25px; padding: 16px; border: 1px dashed #efad9f; border-radius: 8px; color: #893e31; background: #fff5f1; font: 13px/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .invite-reveal > div:last-child { padding: 0 25px; display: flex; gap: 10px; }
@@ -651,6 +662,11 @@ h1, h2, h3, p, dl, dd { margin: 0; }
   .project-board-meta { margin: 0 19px 20px; grid-template-columns: 1fr; gap: 14px; }
   .project-board-meta > div, .project-board-meta > div:first-child { padding: 0; border-left: 0; }
   .invite-create { padding: 21px; }
+  .student-guide > header { align-items: start; flex-direction: column; }
+  .student-guide > header > span { max-width: none; text-align: left; }
+  .student-guide-grid { grid-template-columns: 1fr; }
+  .student-guide-card pre { min-height: 0; }
+  .student-guide-card .button { width: 100%; }
   .collection-page { width: min(100% - 28px, 1400px); }
   .collection-nav .mode-tabs { display: none; }
   .collection-hero { padding: 48px 0; }

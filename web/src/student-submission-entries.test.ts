@@ -16,8 +16,12 @@ import {
 import { VersionSubmissionActions } from './pages/StudentVersionsPage';
 import {
   RevealedInviteActions,
+  TeacherStudentGuide,
+  buildStudentAiGuide,
+  buildStudentBrowserGuide,
   buildStudentInviteMessages,
   copyStudentInviteMessage,
+  copyTeacherStudentGuide,
   publicAppBaseUrl,
 } from './pages/AdminInvitesPage';
 
@@ -167,7 +171,41 @@ describe('学员邀请码转发说明', () => {
     expect(messages[0]).toContain('HTML、ZIP 或网页文件夹');
     expect(messages[0]).toContain('AI 助手');
     expect(messages[0]).toContain(`${origin}/install`);
-    expect(messages[0]).toContain('无需 SkillHub');
+    expect(messages[0]).toContain('macOS');
+    expect(messages[0]).toContain('Windows');
+    expect(messages[0]).toContain('WorkBuddy');
+    expect(messages[0]).toContain('Codex');
+    expect(messages[0]).toContain('其他 Agent');
+    expect(messages[0]).toContain('使用邀请码加入 VibeHub');
+    expect(messages[0]).toContain('部署我的游戏');
+  });
+
+  it('未生成邀请码前也渲染两套可转发说明，只使用当前营地、公开地址和占位码', () => {
+    const browserGuide = buildStudentBrowserGuide('星际创造营', origin);
+    const aiGuide = buildStudentAiGuide('星际创造营', origin);
+    const html = render(createElement(TeacherStudentGuide, {
+      campName: '星际创造营',
+      origin,
+      onCopy: vi.fn(),
+    }));
+
+    expect(browserGuide).toContain('星际创造营');
+    expect(browserGuide).toContain('CAMP-XXXX');
+    expect(browserGuide).toContain(`${origin}/login`);
+    expect(browserGuide).toContain('网页 HTML、ZIP 或网页文件夹');
+    expect(aiGuide).toContain(`${origin}/install`);
+    expect(aiGuide).toContain('macOS');
+    expect(aiGuide).toContain('Windows');
+    expect(aiGuide).toContain('WorkBuddy');
+    expect(aiGuide).toContain('Codex');
+    expect(aiGuide).toContain('其他 Agent');
+    expect(aiGuide).toContain('使用邀请码加入 VibeHub');
+    expect(aiGuide).toContain('部署我的游戏');
+    expect(`${browserGuide}${aiGuide}`).not.toMatch(/深圳|STUDENT-ONE|hub\.supermind-ai\.cn/);
+    expect(html).toContain('发给学员的使用说明');
+    expect(html).toContain('复制网页登录说明');
+    expect(html).toContain('复制 AI 部署说明');
+    expect(html).toContain('CAMP-XXXX');
   });
 
   it('优先规范化公开构建地址，仅缺失时回退浏览器地址', () => {
@@ -187,9 +225,15 @@ describe('学员邀请码转发说明', () => {
     expect(student.match(/复制发给学员的说明/g)).toHaveLength(2);
     expect(student).toContain('aria-label="复制第 1 位学员的说明"');
     expect(student).toContain('aria-label="复制第 2 位学员的说明"');
-    expect(student).toContain('无需 SkillHub');
+    expect(student).toContain(`${origin}/login`);
+    expect(student).toContain(`${origin}/install`);
+    expect(student).toContain('使用邀请码加入 VibeHub');
+    expect(student).toContain('部署我的游戏');
     expect(teacher).not.toContain('复制发给学员的说明');
-    expect(teacher).not.toContain('无需 SkillHub');
+    expect(teacher).not.toContain(`${origin}/login`);
+    expect(teacher).not.toContain(`${origin}/install`);
+    expect(teacher).not.toContain('使用邀请码加入 VibeHub');
+    expect(teacher).not.toContain('部署我的游戏');
   });
 
   it('只按本次生成时的角色展示说明，且不记录或持久化明码', () => {
@@ -197,8 +241,28 @@ describe('学员邀请码转发说明', () => {
     expect(source).toContain('setRevealedRole(input.role)');
     expect(source).toContain('VITE_PUBLIC_APP_URL');
     expect(source).toContain('publicAppBaseUrl(');
+    expect(source).toContain('role="status"');
+    expect(source.indexOf('<TeacherStudentGuide')).toBeGreaterThan(-1);
+    expect(source.indexOf('<TeacherStudentGuide')).toBeLessThan(source.indexOf('<section className="panel invite-reveal"'));
     expect(source).not.toContain('localStorage');
     expect(source).not.toContain('console.');
+  });
+
+  it('复制两套模板时使用固定成功或失败提示，不回显邀请码', async () => {
+    const setNotice = vi.fn();
+    const guide = buildStudentBrowserGuide('星际创造营', origin);
+    await copyTeacherStudentGuide(guide, 'browser', vi.fn(async () => undefined), setNotice);
+    expect(setNotice).toHaveBeenLastCalledWith('网页登录说明已复制');
+
+    await copyTeacherStudentGuide(guide, 'ai', vi.fn(async () => { throw new Error('CAMP-SECRET'); }), setNotice);
+    expect(setNotice).toHaveBeenLastCalledWith('AI 部署说明暂时无法复制。');
+    expect(setNotice.mock.calls.flat().join('')).not.toContain('CAMP-SECRET');
+  });
+
+  it('320px 宽度下说明卡和复制按钮改为单列布局', () => {
+    const styles = readSource('./styles.css');
+    expect(styles).toContain('.student-guide-grid { grid-template-columns: 1fr; }');
+    expect(styles).toContain('.student-guide-card .button { width: 100%; }');
   });
 
   it('复制单个学员文案并给出不泄露邀请码的反馈', async () => {

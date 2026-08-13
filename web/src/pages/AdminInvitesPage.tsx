@@ -9,7 +9,10 @@ import { formatDateTime } from '../lib/presentation';
 import type { InviteListItem } from '../lib/types';
 
 type InviteRole = 'student' | 'teacher';
+type StudentGuideKind = 'browser' | 'ai';
 interface CreateInviteInput { count: number; role: InviteRole; max_devices: number }
+
+const STUDENT_INVITE_PLACEHOLDER = 'CAMP-XXXX';
 
 export function publicAppBaseUrl(configuredUrl?: string, browserOrigin?: string) {
   const baseUrl = configuredUrl?.trim()
@@ -18,21 +21,62 @@ export function publicAppBaseUrl(configuredUrl?: string, browserOrigin?: string)
   return baseUrl.replace(/\/$/, '');
 }
 
-export function buildStudentInviteMessages(codes: string[], campName: string, origin: string) {
+export function buildStudentBrowserGuide(campName: string, origin: string, code = STUDENT_INVITE_PLACEHOLDER) {
   const baseUrl = origin.replace(/\/$/, '');
-  return codes.map((code) => [
+  return [
     `欢迎加入「${campName}」！`,
     '',
-    `请打开 ${baseUrl}/login`,
-    `输入你自己的邀请码：${code}`,
-    '',
+    '网页登录并提交游戏：',
+    `1. 打开 ${baseUrl}/login`,
+    `2. 输入你自己的邀请码：${code}`,
+    '3. 登录后点击“提交我的游戏”。',
+    '4. 上传网页 HTML、ZIP 或网页文件夹。',
     '每人一码，不可互换或与他人共用。',
-    '登录后，点击“提交我的游戏”。你可以选择：',
-    '1. 直接上传网页 HTML、ZIP 或网页文件夹；',
-    `2. 使用 AI 助手部署：${baseUrl}/install`,
+  ].join('\n');
+}
+
+export function buildStudentAiGuide(campName: string, origin: string, code = STUDENT_INVITE_PLACEHOLDER) {
+  const baseUrl = origin.replace(/\/$/, '');
+  return [
+    `欢迎加入「${campName}」！`,
     '',
-    '无需 SkillHub，也能完成提交。',
+    '使用 AI 助手部署游戏：',
+    `1. 在 WorkBuddy、Codex 或其他 Agent 中打开官方安装页：${baseUrl}/install`,
+    '2. 让 AI 根据你的电脑选择 macOS 或 Windows 指令安装 VibeHub 部署 Skill。',
+    '3. 安装完成后，对 AI 说“使用邀请码加入 VibeHub”，并提供你自己的邀请码：',
+    code,
+    '4. 在游戏项目目录里对 AI 说“部署我的游戏”。',
+    '每人一码，不可互换或与他人共用。',
+  ].join('\n');
+}
+
+export function buildStudentInviteMessages(codes: string[], campName: string, origin: string) {
+  return codes.map((code) => [
+    '方式一：网页登录提交',
+    buildStudentBrowserGuide(campName, origin, code),
+    '',
+    '方式二：让 AI 助手部署',
+    buildStudentAiGuide(campName, origin, code),
   ].join('\n'));
+}
+
+export async function copyTeacherStudentGuide(message: string, kind: StudentGuideKind, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
+  try {
+    await copy(message);
+    setNotice(kind === 'browser' ? '网页登录说明已复制' : 'AI 部署说明已复制');
+  } catch {
+    setNotice(kind === 'browser' ? '网页登录说明暂时无法复制。' : 'AI 部署说明暂时无法复制。');
+  }
+}
+
+export function TeacherStudentGuide({ campName, origin, onCopy }: {
+  campName: string;
+  origin: string;
+  onCopy: (message: string, kind: StudentGuideKind) => void;
+}) {
+  const browserGuide = buildStudentBrowserGuide(campName, origin);
+  const aiGuide = buildStudentAiGuide(campName, origin);
+  return <section className="panel student-guide"><header><div><p className="eyebrow">转发给学员</p><h2>发给学员的使用说明</h2></div><span>生成邀请码后，把 CAMP-XXXX 换成学员自己的码</span></header><div className="student-guide-grid"><article className="student-guide-card"><div><strong>网页登录提交</strong><span>不安装 Skill，直接上传作品</span></div><pre>{browserGuide}</pre><button type="button" className="button button-outline" onClick={() => onCopy(browserGuide, 'browser')}>复制网页登录说明</button></article><article className="student-guide-card"><div><strong>AI 助手部署</strong><span>支持 macOS、Windows 和主流 Agent</span></div><pre>{aiGuide}</pre><button type="button" className="button button-outline" onClick={() => onCopy(aiGuide, 'ai')}>复制 AI 部署说明</button></article></div></section>;
 }
 
 export async function copyStudentInviteMessage(message: string, index: number, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
@@ -92,6 +136,9 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
     }
     void copyStudentInviteMessage(value, index, copyToClipboard, setNotice);
   };
+  const copyGuide = (message: string, kind: StudentGuideKind) => {
+    void copyTeacherStudentGuide(message, kind, copyToClipboard, setNotice);
+  };
   const exportCsv = async () => {
     try {
       const blob = await api.exportInvites(campId);
@@ -114,7 +161,7 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
     {notice && <p className="action-message" role="status">{notice}</p>}
     <section className="invite-layout">
       <form className="panel invite-create" onSubmit={submit}><p className="eyebrow">新建一批</p><h2>把人请进营地</h2><label htmlFor="invite-count">数量</label><input id="invite-count" type="number" min="1" max="200" value={count} onChange={(event) => setCount(event.target.value)} /><label htmlFor="invite-role">角色</label><select id="invite-role" value={role} onChange={(event) => setRole(event.target.value as InviteRole)}><option value="student">学员</option><option value="teacher">老师</option></select><label htmlFor="invite-devices">设备上限</label><input id="invite-devices" type="number" min="1" max="20" value={maxDevices} onChange={(event) => setMaxDevices(event.target.value)} />{create.isError && <p className="form-error">{readableError(create.error)}</p>}<button className="button button-coral button-wide" disabled={create.isPending}>{create.isPending ? '正在生成…' : '生成邀请码'}</button></form>
-      <div className="invite-main"><section className="panel invite-reveal"><header><div><p className="eyebrow">刚刚生成</p><h2>明码只显示这一次</h2></div>{revealedCodes.length > 0 && <span>{revealedCodes.length} 个</span>}</header>{revealedCodes.length && revealedRole ? <RevealedInviteActions role={revealedRole} codes={revealedCodes} campName={campName} origin={appBaseUrl} onCopy={copyRevealed} onExport={exportCsv} /> : <div className="teacher-empty"><strong>生成后在这里领取邀请码</strong><p>请立即复制或导出保存，刷新页面后只会显示脱敏码。</p></div>}</section>
+      <div className="invite-main"><TeacherStudentGuide campName={campName} origin={appBaseUrl} onCopy={copyGuide} /><section className="panel invite-reveal"><header><div><p className="eyebrow">刚刚生成</p><h2>明码只显示这一次</h2></div>{revealedCodes.length > 0 && <span>{revealedCodes.length} 个</span>}</header>{revealedCodes.length && revealedRole ? <RevealedInviteActions role={revealedRole} codes={revealedCodes} campName={campName} origin={appBaseUrl} onCopy={copyRevealed} onExport={exportCsv} /> : <div className="teacher-empty"><strong>生成后在这里领取邀请码</strong><p>请立即复制或导出保存，刷新页面后只会显示脱敏码。</p></div>}</section>
         <section className="panel invite-table"><header><div><p className="eyebrow">全部邀请码</p><h2>发放记录</h2></div><button className="button button-outline" onClick={exportCsv}>导出 CSV</button></header>{invites.data.items.length ? <div className="table-scroll"><table><thead><tr><th>邀请码</th><th>身份 / 状态</th><th>绑定的学员 / 项目</th><th>已用设备</th><th /></tr></thead><tbody>{invites.data.items.map((invite) => <tr key={`${invite.code_masked}-${invite.created_at}`}><td><b>{invite.code_masked}</b><small>{formatDateTime(invite.created_at)}</small></td><td><StatusPill tone={invite.status === 'revoked' ? 'danger' : invite.status === 'bound' ? 'success' : 'muted'}>{invite.role === 'teacher' ? '老师' : '学员'} · {invite.status === 'unused' ? '未使用' : invite.status === 'bound' ? '已绑定' : '已撤销'}</StatusPill></td><td>{invite.bound_user || '尚未绑定'}{invite.bound_project && <small>{invite.bound_project}</small>}</td><td>{invite.devices} / {invite.max_devices}</td><td><button className="button button-outline button-danger" onClick={() => revoke.mutate(invite)} disabled={invite.status === 'revoked' || revoke.isPending}>{revoke.isPending ? '撤销中…' : '撤销'}</button></td></tr>)}</tbody></table></div> : <div className="teacher-empty"><strong>还没有邀请码</strong><p>先生成第一批邀请码，发给本场营的老师和学员。</p></div>}</section>
       </div>
     </section>
