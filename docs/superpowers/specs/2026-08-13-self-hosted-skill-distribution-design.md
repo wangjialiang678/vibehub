@@ -87,7 +87,7 @@ audience: product, tech
 - 生产先上传文件和在线引导器，最后更新 `manifest.json`，避免新清单指向尚未上传的文件。
 - 在线安装遇到网络错误、非 2xx、大小不符或哈希不符时立即停止，不改 Agent 目录，并给出可操作中文提示。
 - 下载成功但本地安装失败时，沿用现有安装器恢复旧版本。
-- 控制台静态产物写入时间戳 release 目录，上传完成后原子切换 `/var/www/vibehub-console` 软链接；线上至少保留前一个控制台 release，整体回滚即可恢复上一份安装资源。禁止对当前静态根目录原地覆盖，以免清单与文件短暂混版。
+- 控制台静态产物写入 `/var/www/vibehub-console/releases/<时间戳>`，上传完成后原子切换父目录内的 `current` 软链接；nginx root 固定指向 `/var/www/vibehub-console/current`。线上至少保留前一个控制台 release，整体回滚即可恢复上一份安装资源。禁止对当前静态根目录原地覆盖，以免清单与文件短暂混版。
 
 # 代码与文档影响
 

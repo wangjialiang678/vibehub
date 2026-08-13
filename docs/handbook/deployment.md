@@ -43,7 +43,7 @@ sudo certbot certonly --nginx -d hub.supermind-ai.cn
 
 ```bash
 sudo mkdir -p /var/lib/vibehub/{versions,sites,previews,uploads,tmp,backup}
-sudo mkdir -p /var/www/vibehub-console /opt/vibehub-releases
+sudo mkdir -p /var/www/vibehub-console/releases /opt/vibehub-releases
 sudo useradd -r -s /usr/sbin/nologin vibehub || true
 sudo chown -R vibehub:vibehub /var/lib/vibehub /opt/vibehub-releases
 sudo chmod 755 /var/lib/vibehub
@@ -120,15 +120,17 @@ test -f dist/downloads/vibehub-skill/manifest.json
 node -e "const m=require('./dist/downloads/vibehub-skill/manifest.json'); if (!m.files?.length) process.exit(1)"
 ```
 
-在服务器上把整套控制台产物写入新的时间戳目录，完成后再原子切换 nginx 使用的软链接。`manifest.json` 与它列出的 Skill 文件会随整套控制台一次生效，更新窗口不会出现跨版本哈希不一致：
+在服务器上把整套控制台产物写入新的时间戳目录，完成后再原子切换 nginx 使用的 `current` 软链接。`infra/nginx/vibehub-hub.conf` 的 root 固定为 `/var/www/vibehub-console/current`，因此不会尝试用软链接覆盖控制台父目录。`manifest.json` 与它列出的 Skill 文件会随整套控制台一次生效：
 
 ```bash
 release_id=<与上传时相同的时间戳>
-sudo install -d -m 0755 /var/www/vibehub-console-releases
-sudo mv /tmp/vibehub-console-${release_id} /var/www/vibehub-console-releases/${release_id}
-sudo ln -sfn /var/www/vibehub-console-releases/${release_id} /var/www/vibehub-console.next
-sudo mv -Tf /var/www/vibehub-console.next /var/www/vibehub-console
+sudo install -d -m 0755 /var/www/vibehub-console/releases
+sudo mv /tmp/vibehub-console-${release_id} /var/www/vibehub-console/releases/${release_id}
+sudo ln -sfn /var/www/vibehub-console/releases/${release_id} /var/www/vibehub-console/current.next
+sudo mv -Tf /var/www/vibehub-console/current.next /var/www/vibehub-console/current
 ```
+
+首次从旧的 `/var/www/vibehub-console` 实目录迁移时，先把原有文件（排除新建的 `releases` 目录）移动到 `/var/www/vibehub-console/releases/legacy-<时间戳>`，再按上面的命令建立 `current`，最后安装并校验新的 nginx 配置。这个一次性迁移会有一个很短的维护窗口；以后发布只切换 `current`。
 
 发布后保留当前版和至少一个上一版。需要回滚时，对上一版目录重复 `ln -sfn` 与 `mv -Tf` 两步即可；确认线上探针全部通过后再清理更旧的静态 release。不要再向 `/var/www/vibehub-console/` 原地 `rsync --delete`。
 
@@ -140,7 +142,7 @@ sudo mv -Tf /var/www/vibehub-console.next /var/www/vibehub-console
 |---|---|
 | `infra/nginx/vibehub-locations.conf` | `/etc/nginx/vibehub-locations.conf`；被官网 `supermind-ai` 的 443 server 引入。正式作品仍由 nginx 直出，主域上的未审核预览路径固定 404。 |
 | `infra/nginx/vibehub-preview-server.conf` | `/etc/nginx/sites-enabled/vibehub-preview`；`*.preview.supermind-ai.cn` 的独立 443 server，只有预览、SDK 与 BaaS 路由回源 Node。 |
-| `infra/nginx/vibehub-hub.conf` | `/etc/nginx/sites-enabled/vibehub-hub`；控制台独立的 `hub.supermind-ai.cn` server 块。 |
+| `infra/nginx/vibehub-hub.conf` | `/etc/nginx/sites-enabled/vibehub-hub`；控制台独立的 `hub.supermind-ai.cn` server 块，静态 root 指向 `/var/www/vibehub-console/current`。 |
 
 从部署端同步并安装它们：
 
