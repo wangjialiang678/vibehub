@@ -50,6 +50,7 @@ audience: product, tech
     ├── agents/openai.yaml
     ├── bin/install.mjs
     ├── bin/vibehub
+    ├── distribution-files.mjs
     └── lib/platform.mjs
 ```
 

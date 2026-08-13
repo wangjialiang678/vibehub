@@ -46,7 +46,7 @@ const manifest = JSON.parse(readFileSync(join(generated, 'manifest.json'), 'utf8
 assert.equal(manifest.schema_version, 1);
 assert.equal(manifest.skill_version, '1.0.0');
 assert.deepEqual(manifest.files.map((file) => file.path), [
-  'AGENTS.md', 'SKILL.md', 'agents/openai.yaml', 'bin/install.mjs', 'bin/vibehub', 'lib/platform.mjs',
+  'AGENTS.md', 'SKILL.md', 'agents/openai.yaml', 'bin/install.mjs', 'bin/vibehub', 'distribution-files.mjs', 'lib/platform.mjs',
 ]);
 for (const entry of manifest.files) {
   const content = readFileSync(join(generated, 'files', entry.path));
@@ -75,7 +75,7 @@ Export immutable values from `distribution-files.mjs`:
 ```js
 export const SKILL_VERSION = '1.0.0';
 export const DISTRIBUTION_FILES = Object.freeze([
-  'AGENTS.md', 'SKILL.md', 'agents/openai.yaml', 'bin/install.mjs', 'bin/vibehub', 'lib/platform.mjs',
+  'AGENTS.md', 'SKILL.md', 'agents/openai.yaml', 'bin/install.mjs', 'bin/vibehub', 'distribution-files.mjs', 'lib/platform.mjs',
 ]);
 export function assertSafeDistributionPath(path) {
   if (!/^[A-Za-z0-9._/-]+$/.test(path) || path.startsWith('/') || path.split('/').includes('..')) {
