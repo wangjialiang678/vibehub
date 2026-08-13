@@ -100,16 +100,23 @@ sudo systemctl is-active vibehub
 
 ## 4. 构建并发布控制台
 
-控制台必须把 API 基址编入产物。Skill 的 npm 包发布并实测可下载后，再同时配置安装命令；发布前不要设置 `VITE_SKILL_INSTALL_COMMAND`，此时 `/install` 会保持“即将开放”状态：
+控制台必须把 API 基址和老师转发给学员的公开地址编入产物。前端的 `prebuild` 会把 Skill 的固定白名单文件、SHA-256 清单和在线安装器生成到 `dist/downloads/vibehub-skill/`；不需要 npm 登录、npm 包发布、SkillHub 凭证或额外的安装命令环境变量：
 
 ```bash
 cd web
 npm ci
 VITE_API_BASE=https://hub.supermind-ai.cn \
 VITE_PUBLIC_APP_URL=https://hub.supermind-ai.cn \
-VITE_SKILL_INSTALL_COMMAND='npx -y @supermind/vibehub-skill@latest' \
 npm run build
 rsync -az --delete ./dist/ <deploy-user>@<server>:/tmp/vibehub-console/
+```
+
+构建后、同步前确认分发产物齐全：
+
+```bash
+test -f dist/downloads/vibehub-skill/install.mjs
+test -f dist/downloads/vibehub-skill/manifest.json
+node -e "const m=require('./dist/downloads/vibehub-skill/manifest.json'); if (!m.files?.length) process.exit(1)"
 ```
 
 在服务器上将产物放到 nginx 的实际根目录：
@@ -170,7 +177,32 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   https://supermind-ai.cn/vibehub/<username>/<project>/
 ```
 
-同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。
+同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。老师登录管理端的邀请码页后，应能看到“发给学员的使用说明”：通用说明分别覆盖 `/login` 网页直传和 `/install` AI 部署；新生成学员邀请码后，每份完整说明只能包含对应学员自己的明码，老师角色邀请码的生成结果不生成绑定该码的学员转发文案。
+
+控制台发布后必须检查 Skill 自托管链路。`/install`、安装器和清单都应返回 200；清单中的每个文件都应可下载，且下载内容的字节数和 SHA-256 与清单一致：
+
+```bash
+curl -fsS -o /dev/null https://hub.supermind-ai.cn/install
+curl -fsS -o /dev/null https://hub.supermind-ai.cn/downloads/vibehub-skill/install.mjs
+curl -fsS https://hub.supermind-ai.cn/downloads/vibehub-skill/manifest.json | \
+  node --input-type=module -e '
+    import { createHash } from "node:crypto";
+    let text = "";
+    for await (const chunk of process.stdin) text += chunk;
+    const manifest = JSON.parse(text);
+    const root = "https://hub.supermind-ai.cn/downloads/vibehub-skill/files/";
+    for (const entry of manifest.files) {
+      const response = await fetch(new URL(entry.path, root));
+      if (!response.ok) process.exit(1);
+      const body = Buffer.from(await response.arrayBuffer());
+      const hash = createHash("sha256").update(body).digest("hex");
+      if (body.byteLength !== entry.bytes || hash !== entry.sha256) process.exit(1);
+    }
+    console.log(`已验证 ${manifest.files.length} 个 Skill 文件`);
+  '
+```
+
+这组探针只验证公开静态分发，不会写入真实学员数据，也不需要安装 SkillHub 或登录 npm。
 
 最后用真实待审版本验证隔离预览：主域预览路径必须为 404；带 claim 的逐 preview 地址第一次只返回 303 且 Location 不含 claim，随后同一 host 的 cookie 请求返回 200。不要把完整 claim 写入终端日志或工单。
 

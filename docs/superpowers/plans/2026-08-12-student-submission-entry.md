@@ -1,5 +1,7 @@
 # Student Submission Entry Implementation Plan
 
+> **Superseded in part on 2026-08-13:** This file preserves the executed 2026-08-12 plan as historical evidence. The browser-upload path, AI-assisted path, SkillHub independence, and teacher handoff remain valid. All steps that make public npm, npm authentication/publishing, npm package probes, or `VITE_SKILL_INSTALL_COMMAND` part of student Skill distribution are superseded by [the self-hosted Skill distribution plan](2026-08-13-self-hosted-skill-distribution.md) and must not be executed. The current channel is `/install → VibeHub HTTPS assets → integrity-checking bootstrap → existing local installer`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every invited student a visible submission action, supporting direct HTML/ZIP/folder/tar.gz uploads and an independent npm-installed AI deployment path that does not depend on SkillHub.

@@ -1,5 +1,7 @@
 # VibeHub 学员双入口提交与独立安装设计
 
+> **2026-08-13 已部分取代**：本文保留 2026-08-12 的设计历史。其中学员网页直传、AI 部署、SkillHub 非必需和老师分发双路径仍然有效；“公开 npm 包 + `VITE_SKILL_INSTALL_COMMAND`”已由 [VibeHub 自托管 Skill 分发设计](2026-08-13-self-hosted-skill-distribution-design.md) 取代。当前路径是 `/install → VibeHub HTTPS 分发资源 → 完整性校验引导程序 → 现有本地安装器`；下文 npm 发布步骤不得再执行。
+
 ## 目标
 
 学员收到邀请码后，无论是否使用 AI 编程工具，都能在 VibeHub 学员页明确找到“提交作品”的下一步，并完成第一次提交。

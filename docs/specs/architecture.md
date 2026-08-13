@@ -419,11 +419,22 @@ vibehub-skill/
 ├── SKILL.md          # 三家 Agent 共用的提示词与操作流程
 ├── AGENTS.md         # 兼容读取 AGENTS.md 的工具
 ├── agents/openai.yaml
+├── bootstrap/install.mjs # 在线完整性校验与下载入口
 ├── bin/install.mjs   # 跨平台安装器
 ├── bin/vibehub       # Node CLI，零第三方运行时依赖
+├── distribution-files.mjs # 公开分发白名单
 └── lib/platform.mjs  # macOS / Windows 系统命令差异
 ```
-学生侧安装：macOS 与 Windows 共用 `/install` 页面提供的一条命令。npm 包完成发布并验证可下载后，构建前通过 `VITE_SKILL_INSTALL_COMMAND` 开放复制按钮；未配置时页面明确显示“即将开放”，不会向学生提供失效命令。安装器把同一份 Skill 分别放到 Codex、Claude Code 与 WorkBuddy 的个人 Skill 目录；可用 `--targets` 只安装指定工具，其他兼容 `SKILL.md` 的 Agent 可用 `--dir` 指定完整目录。更新时先在目标同级暂存完整新版本并验证文件，再把原目录移到 `~/.vibehub/skill-backups/` 下的时间戳备份，最后原子换入新目录；失败时恢复原目录并清理暂存目录。备份不留在 Agent 的 Skill 扫描目录里。超脑 SkillHub 作为内部镜像和版本管理入口，不作为 Windows 学生的唯一安装方式。
+学生侧的当前主渠道是：
+
+```text
+/install → VibeHub HTTPS 静态资源 → manifest 白名单/字节数/SHA-256 校验
+         → 已验证的本地安装器 → Agent 个人 Skill 目录
+```
+
+`web` 的开发、测试和构建前步骤会调用分发生成器，只复制固定白名单中的运行文件，并生成 `manifest.json`。下载引导程序拒绝跳转、非 HTTPS 生产来源、未知或重复路径、超限内容以及哈希不符的文件；全部文件验证后才用 Node 调用现有 `bin/install.mjs`，并总是清理下载暂存目录。
+
+macOS 和 Windows 在 `/install` 分别获得 shell 和 PowerShell 命令，都使用同一份 VibeHub 自托管产物。本地安装器把 Skill 分别放到 Codex、Claude Code 与 WorkBuddy 的个人 Skill 目录；可用 `--targets` 只安装指定工具，其他兼容 `SKILL.md` 的 Agent 可用 `--dir` 指定完整目录。更新时先在目标同级暂存完整新版本并验证文件，再把原目录移到 `~/.vibehub/skill-backups/` 下的时间戳备份，最后原子换入新目录；失败时恢复原目录并清理暂存目录。备份不留在 Agent 的 Skill 扫描目录里。学生安装链路不经过 npm 包发布或超脑 SkillHub；SkillHub 如保留镜像，也只是内部存档。
 
 ### 6.2 握手时序
 
@@ -522,6 +533,15 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 | 访客 | 作品集合页 | `#collection` ✅ 已有 |
 
 **原型已实现 3 个页面，还需新增 4 个。** 老师端的「课程总览」是需求文档 §7.7 明确要求的（要能看出谁没开始、谁卡住了），P0 不能省。
+
+### 7.5 老师向学员分发说明
+
+老师登录管理端的邀请码页后，始终能看到两条可复制的学员路径：
+
+- 网页登录：打开 `/login`，输入个人邀请码，再上传 HTML、ZIP 或网页文件夹。
+- AI 部署：打开 `/install`，由 AI 根据 macOS/Windows 安装 Skill，然后说“使用邀请码加入 VibeHub”和“部署我的游戏”。
+
+通用说明使用 `CAMP-XXXX` 占位符，不写死城市、营地或生产域名。新生成学员邀请码后，每份转发文案只替换为对应学员的一个明码；刷新后不从脱敏历史恢复。生成老师角色邀请码时，生成结果只提供原始邀请码/导出操作，不生成绑定该码的学员转发文案；上方通用指南仍然可见。复制成功或失败都通过可访问的状态提示反馈，邀请码不写入日志或持久化的前端状态。
 
 ---
 
