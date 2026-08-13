@@ -53,12 +53,12 @@ function parseOutput(args) {
 }
 
 function writeBootstrap(output) {
-  const bootstrap = `#!/usr/bin/env node
-console.error('VibeHub Skill 在线安装器尚未生成完整安装器。');
-process.exitCode = 1;
-`;
   const destination = join(output, 'install.mjs');
-  writeFileSync(destination, bootstrap);
+  const source = join(skillRoot, 'bootstrap', 'install.mjs');
+  if (!lstatSync(source).isFile()) {
+    throw new Error('在线安装器源文件不是普通文件。');
+  }
+  copyFileSync(source, destination);
   if (process.platform !== 'win32') chmodSync(destination, 0o755);
 }
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -20,6 +21,69 @@ function run(command, args, options) {
     child.on('error', reject);
     child.on('close', (code) => resolveRun({ code, stdout, stderr }));
   });
+}
+
+async function buildHostedDistribution() {
+  const output = mkdtempSync(join(tmpdir(), 'vh-skill-hosted-dist-'));
+  const generated = await run(process.execPath, [join(skillRoot, 'scripts/build-distribution.mjs'), '--out', output], {
+    cwd: repoRoot, env: { ...process.env },
+  });
+  assert.equal(generated.code, 0, generated.stderr);
+  return output;
+}
+
+async function createHostedFixture(t, intercept = null) {
+  const distribution = await buildHostedDistribution();
+  const downloadTmp = mkdtempSync(join(tmpdir(), 'vh-skill-download-root-'));
+  const requests = [];
+  const prefix = '/downloads/vibehub-skill/';
+  const server = createServer((request, response) => {
+    const requestUrl = new URL(request.url, 'http://127.0.0.1');
+    if (!requestUrl.pathname.startsWith(prefix)) {
+      response.writeHead(404).end('not found');
+      return;
+    }
+    const relativePath = decodeURIComponent(requestUrl.pathname.slice(prefix.length));
+    requests.push(relativePath);
+    if (intercept?.({ relativePath, request, response, distribution })) return;
+    const filePath = join(distribution, relativePath);
+    if (!existsSync(filePath)) {
+      response.writeHead(404).end('not found');
+      return;
+    }
+    const body = readFileSync(filePath);
+    response.writeHead(200, { 'content-length': body.byteLength });
+    response.end(body);
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    server.once('error', rejectListen);
+    server.listen(0, '127.0.0.1', resolveListen);
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const baseUrl = `http://127.0.0.1:${address.port}${prefix}`;
+  t.after(async () => {
+    server.closeAllConnections();
+    await new Promise((resolveClose) => server.close(resolveClose));
+    rmSync(distribution, { recursive: true, force: true });
+    rmSync(downloadTmp, { recursive: true, force: true });
+  });
+  return { baseUrl, distribution, downloadTmp, requests };
+}
+
+function hostedInstallArgs(fixture, ...args) {
+  return [
+    join(fixture.distribution, 'install.mjs'),
+    '--base-url', fixture.baseUrl,
+    ...args,
+  ];
+}
+
+function assertNoDownloadTemps(downloadTmp) {
+  assert.deepEqual(
+    readdirSync(downloadTmp).filter((name) => name.startsWith('vibehub-skill-download-')),
+    [],
+  );
 }
 
 test('一条命令把同一份提示词和脚本安装到 Codex、Claude Code 与 WorkBuddy', async () => {
@@ -261,5 +325,279 @@ test('自托管分发拒绝通过符号链接把输出目录指回 Skill 源码'
   } finally {
     rmSync(sourceSentinel, { recursive: true, force: true });
     rmSync(sandbox, { recursive: true, force: true });
+  }
+});
+
+test('在线安装从真实 HTTP 分发下载精确七个文件、转发参数并清理临时目录', async (t) => {
+  const fixture = await createHostedFixture(t);
+  const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-home-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  const result = await run(process.execPath, hostedInstallArgs(
+    fixture,
+    '--home', home,
+    '--targets', 'codex',
+  ), {
+    cwd: repoRoot,
+    env: { ...process.env, NODE_ENV: 'test', TMPDIR: fixture.downloadTmp },
+  });
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /安装完成/);
+  const installed = join(home, '.agents', 'skills', 'vibehub');
+  for (const filePath of [
+    'AGENTS.md',
+    'SKILL.md',
+    'agents/openai.yaml',
+    'bin/install.mjs',
+    'bin/vibehub',
+    'distribution-files.mjs',
+    'lib/platform.mjs',
+  ]) {
+    assert.ok(existsSync(join(installed, filePath)), `应安装 ${filePath}`);
+  }
+  assert.deepEqual(fixture.requests.sort(), [
+    'files/AGENTS.md',
+    'files/SKILL.md',
+    'files/agents/openai.yaml',
+    'files/bin/install.mjs',
+    'files/bin/vibehub',
+    'files/distribution-files.mjs',
+    'files/lib/platform.mjs',
+    'manifest.json',
+  ].sort());
+  assertNoDownloadTemps(fixture.downloadTmp);
+});
+
+test('在线安装在文件哈希被篡改时保护已有 Skill 并清理下载目录', async (t) => {
+  const fixture = await createHostedFixture(t, ({ relativePath, response, distribution }) => {
+    if (relativePath !== 'files/SKILL.md') return false;
+    const body = Buffer.from(readFileSync(join(distribution, relativePath)));
+    body[0] ^= 0xff;
+    response.writeHead(200, { 'content-length': body.byteLength });
+    response.end(body);
+    return true;
+  });
+  const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-existing-'));
+  const destination = join(home, '.agents', 'skills', 'vibehub');
+  mkdirSync(destination, { recursive: true });
+  writeFileSync(join(destination, 'SKILL.md'), 'student customization');
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  const result = await run(process.execPath, hostedInstallArgs(
+    fixture,
+    '--home', home,
+    '--targets', 'codex',
+  ), {
+    cwd: repoRoot,
+    env: { ...process.env, NODE_ENV: 'test', TMPDIR: fixture.downloadTmp },
+  });
+
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /完整性校验失败/);
+  assert.doesNotMatch(result.stderr, /\n\s+at\s|install\.mjs:\d+/);
+  assert.equal(readFileSync(join(destination, 'SKILL.md'), 'utf8'), 'student customization');
+  assert.equal(existsSync(join(home, '.vibehub', 'skill-backups')), false);
+  assertNoDownloadTemps(fixture.downloadTmp);
+});
+
+test('在线安装拒绝清单缺失、跳转、超限、重复、危险路径与无效元数据', async (t) => {
+  const cases = [
+    {
+      label: '清单 404',
+      expected: /获取安装清单失败/,
+      intercept: ({ relativePath, response }) => {
+        if (relativePath !== 'manifest.json') return false;
+        response.writeHead(404).end('missing');
+        return true;
+      },
+    },
+    {
+      label: '清单跳转',
+      expected: /禁止跳转/,
+      intercept: ({ relativePath, response }) => {
+        if (relativePath !== 'manifest.json') return false;
+        response.writeHead(302, { location: '/other/manifest.json' }).end();
+        return true;
+      },
+    },
+    {
+      label: '清单响应超限',
+      expected: /安装清单超过大小限制/,
+      intercept: ({ relativePath, response }) => {
+        if (relativePath !== 'manifest.json') return false;
+        const body = Buffer.alloc((64 * 1024) + 1, 0x20);
+        response.writeHead(200, { 'content-length': body.byteLength });
+        response.end(body);
+        return true;
+      },
+    },
+    {
+      label: '清单缺少白名单文件',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.files.pop(); },
+    },
+    {
+      label: '清单重复路径',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.files[1] = { ...manifest.files[0] }; },
+    },
+    {
+      label: '清单危险路径',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.files[0].path = '../AGENTS.md'; },
+    },
+    {
+      label: '文件声明超过上限',
+      expected: /文件大小超过限制/,
+      mutate: (manifest) => { manifest.files[0].bytes = (2 * 1024 * 1024) + 1; },
+    },
+    {
+      label: '哈希必须为小写十六进制',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.files[0].sha256 = manifest.files[0].sha256.toUpperCase(); },
+    },
+    {
+      label: '版本号格式无效',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.skill_version = 'latest'; },
+    },
+    {
+      label: '清单版本无效',
+      expected: /安装清单不安全/,
+      mutate: (manifest) => { manifest.schema_version = 2; },
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, async (subtest) => {
+      const fixture = await createHostedFixture(subtest, (context) => {
+        if (entry.intercept?.(context)) return true;
+        if (!entry.mutate || context.relativePath !== 'manifest.json') return false;
+        const manifest = JSON.parse(readFileSync(join(context.distribution, 'manifest.json'), 'utf8'));
+        entry.mutate(manifest);
+        const body = Buffer.from(`${JSON.stringify(manifest)}\n`);
+        context.response.writeHead(200, { 'content-length': body.byteLength });
+        context.response.end(body);
+        return true;
+      });
+      const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-invalid-manifest-'));
+      subtest.after(() => rmSync(home, { recursive: true, force: true }));
+      const result = await run(process.execPath, hostedInstallArgs(
+        fixture,
+        '--home', home,
+        '--targets', 'codex',
+      ), {
+        cwd: repoRoot,
+        env: { ...process.env, NODE_ENV: 'test', TMPDIR: fixture.downloadTmp },
+      });
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, entry.expected);
+      assertNoDownloadTemps(fixture.downloadTmp);
+    });
+  }
+});
+
+test('在线安装拒绝文件跳转、响应超出清单与中断下载', async (t) => {
+  const cases = [
+    {
+      label: '文件跳转',
+      expected: /禁止跳转/,
+      intercept: ({ relativePath, response }) => {
+        if (relativePath !== 'files/SKILL.md') return false;
+        response.writeHead(307, { location: '/other/SKILL.md' }).end();
+        return true;
+      },
+    },
+    {
+      label: '文件响应超出清单',
+      expected: /下载文件超过大小限制|下载内容与清单不符/,
+      intercept: ({ relativePath, response, distribution }) => {
+        if (relativePath !== 'files/SKILL.md') return false;
+        const body = Buffer.concat([readFileSync(join(distribution, relativePath)), Buffer.from('extra')]);
+        response.writeHead(200);
+        response.end(body);
+        return true;
+      },
+    },
+    {
+      label: '文件响应中断',
+      expected: /下载文件失败或内容不完整/,
+      intercept: ({ relativePath, response, distribution }) => {
+        if (relativePath !== 'files/SKILL.md') return false;
+        const body = readFileSync(join(distribution, relativePath));
+        response.writeHead(200, { 'content-length': body.byteLength });
+        response.write(body.subarray(0, Math.max(1, Math.floor(body.byteLength / 2))));
+        response.destroy();
+        return true;
+      },
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, async (subtest) => {
+      const fixture = await createHostedFixture(subtest, entry.intercept);
+      const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-bad-file-'));
+      subtest.after(() => rmSync(home, { recursive: true, force: true }));
+      const result = await run(process.execPath, hostedInstallArgs(
+        fixture,
+        '--home', home,
+        '--targets', 'codex',
+      ), {
+        cwd: repoRoot,
+        env: { ...process.env, NODE_ENV: 'test', TMPDIR: fixture.downloadTmp },
+      });
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, entry.expected);
+      assert.equal(existsSync(join(home, '.agents')), false);
+      assertNoDownloadTemps(fixture.downloadTmp);
+    });
+  }
+});
+
+test('在线安装要求显式安全来源并只接受安装器参数白名单', async (t) => {
+  const fixture = await createHostedFixture(t);
+  const cases = [
+    {
+      label: '缺少来源',
+      args: [join(fixture.distribution, 'install.mjs'), '--targets', 'codex'],
+      expected: /必须提供 --base-url/,
+    },
+    {
+      label: '生产环境拒绝 HTTP',
+      args: [join(fixture.distribution, 'install.mjs'), '--base-url', 'http://example.com/downloads/', '--targets', 'codex'],
+      env: { NODE_ENV: 'production' },
+      expected: /安装来源地址不安全/,
+    },
+    {
+      label: '测试环境只放行本机 HTTP',
+      args: [join(fixture.distribution, 'install.mjs'), '--base-url', 'http://192.0.2.1/downloads/', '--targets', 'codex'],
+      env: { NODE_ENV: 'test' },
+      expected: /安装来源地址不安全/,
+    },
+    {
+      label: '拒绝带凭证和片段的来源',
+      args: [join(fixture.distribution, 'install.mjs'), '--base-url', 'https://student:secret@example.com/downloads/#token', '--targets', 'codex'],
+      expected: /安装来源地址不安全/,
+      forbidden: /student|secret|token/,
+    },
+    {
+      label: '拒绝未知参数',
+      args: [...hostedInstallArgs(fixture), '--eval', 'console.log(1)'],
+      expected: /在线安装器不认识的参数/,
+    },
+  ];
+
+  for (const entry of cases) {
+    await t.test(entry.label, async () => {
+      const result = await run(process.execPath, entry.args, {
+        cwd: repoRoot,
+        env: { ...process.env, NODE_ENV: 'test', ...entry.env, TMPDIR: fixture.downloadTmp },
+      });
+      assert.notEqual(result.code, 0);
+      assert.match(result.stderr, entry.expected);
+      if (entry.forbidden) assert.doesNotMatch(result.stderr, entry.forbidden);
+      assertNoDownloadTemps(fixture.downloadTmp);
+    });
   }
 });
