@@ -3,6 +3,7 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, renameSync, 
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DISTRIBUTION_FILES } from '../distribution-files.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const targetDefinitions = {
@@ -10,7 +11,7 @@ const targetDefinitions = {
   claude: { label: 'Claude Code', parts: ['.claude', 'skills', 'vibehub'] },
   workbuddy: { label: 'WorkBuddy', parts: ['.codebuddy', 'skills', 'vibehub'] },
 };
-const files = ['SKILL.md', 'AGENTS.md', 'bin/vibehub', 'lib/platform.mjs', 'agents/openai.yaml'];
+const files = DISTRIBUTION_FILES;
 
 function fail(message) {
   console.error(`✗ ${message}`);
