@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the unpublished npm installation path with a VibeHub-hosted, integrity-checked Skill installer for macOS and Windows.
+**Goal:** Replace the unpublished npm installation path with a VibeHub-hosted, integrity-checked Skill installer for macOS and Windows, and expose reusable student onboarding instructions in the teacher admin.
 
 **Architecture:** A deterministic generator copies the exact existing Skill runtime whitelist into `web/public/downloads/vibehub-skill`, writes a SHA-256 manifest, and publishes a small Node bootstrap installer. The bootstrap downloads only manifest-listed files from the same HTTPS distribution root, verifies sizes and hashes, then invokes the existing transactional installer. The React install page exposes separate macOS and PowerShell commands plus a copy-for-AI prompt; browser uploads remain independent.
 
@@ -160,8 +160,8 @@ const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 ```
 
-- Permit `--base-url` only when `NODE_ENV=test`; production uses its own script URL as the base.
-- Require HTTPS in production and `http://127.0.0.1`/`localhost` only in tests.
+- Require `--base-url`: the installer page passes its current public `/downloads/vibehub-skill/` root because the downloaded bootstrap runs from a local temporary path and cannot infer the response URL.
+- Require a URL without credentials or fragments; require HTTPS in production and permit `http://127.0.0.1`/`localhost` only in tests.
 - Fetch `manifest.json` with redirect rejection, verify content length while streaming, require schema `1`, exact Skill version format, exact whitelist set with no duplicate paths, per-file size in `1..MAX_FILE_BYTES`, and lowercase 64-character SHA-256.
 - Create a `mkdtempSync(join(tmpdir(), 'vibehub-skill-download-'))` root; download files sequentially under `skill/`, reject redirects/non-2xx/truncated/oversized bodies, and verify bytes and SHA-256 before continuing.
 - Invoke the downloaded `skill/bin/install.mjs` with `process.execPath` and forward only the existing installer arguments (`--home`, `--targets`, `--dir`, `--help`). Do not use a shell.
@@ -228,8 +228,8 @@ const installerUrl = `${window.location.origin}${INSTALLER_PATH}`;
 Commands:
 
 ```text
-macOS: tmp="$(mktemp -t vibehub-skill.XXXXXX.mjs)" && curl --fail --silent --show-error --location "<url>" --output "$tmp" && node "$tmp"; code=$?; rm -f "$tmp"; exit $code
-Windows: $p=Join-Path $env:TEMP ('vibehub-skill-'+[guid]::NewGuid()+'.mjs'); try { Invoke-WebRequest -UseBasicParsing '<url>' -OutFile $p; node $p; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } } finally { Remove-Item $p -Force -ErrorAction SilentlyContinue }
+macOS: tmp="$(mktemp -t vibehub-skill.XXXXXX.mjs)" && curl --fail --silent --show-error --location "<url>" --output "$tmp" && node "$tmp" --base-url "<distribution-root>"; code=$?; rm -f "$tmp"; exit $code
+Windows: $p=Join-Path $env:TEMP ('vibehub-skill-'+[guid]::NewGuid()+'.mjs'); try { Invoke-WebRequest -UseBasicParsing '<url>' -OutFile $p; node $p --base-url '<distribution-root>'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } } finally { Remove-Item $p -Force -ErrorAction SilentlyContinue }
 ```
 
 The AI prompt must say to open the official VibeHub installer URL, detect macOS/Windows, run the shown official command, then ask the student for an invite code; it must not contain a real code or city name.
@@ -255,7 +255,56 @@ git add web/package.json web/src/pages/InstallPage.tsx web/src/install-page.test
 git commit -m "feat: offer hosted skill installation"
 ```
 
-### Task 4: Documentation, validation, and production release
+### Task 4: Teacher-facing student onboarding instructions
+
+**Files:**
+- Modify: `web/src/pages/AdminInvitesPage.tsx`
+- Modify: `web/src/student-submission-entries.test.ts`
+- Modify: `web/src/styles.css`
+
+- [ ] **Step 1: Write failing teacher-admin behavior tests**
+
+Assert that the invite page renders a persistent “发给学员的使用说明” section even before codes are generated. Verify separate browser and AI paths include `/login`, `/install`, HTML/ZIP/folder upload, macOS, Windows, WorkBuddy, Codex, the exact AI phrases, and a `CAMP-XXXX` placeholder rather than a real code or city. Verify copy success/failure uses `role=status` and does not log or persist invite codes.
+
+Extend per-code assertions so every student message contains only its own code and both routes, while teacher-role codes still hide all student instructions.
+
+- [ ] **Step 2: Run the focused test and verify RED**
+
+Run:
+
+```bash
+npx vitest run src/student-submission-entries.test.ts
+```
+
+Expected: FAIL because the persistent teacher guide and its copy interaction do not exist.
+
+- [ ] **Step 3: Implement the persistent guide**
+
+Add pure message builders for the browser route, AI route, and combined per-code handout. Render a panel in the teacher invite page before the one-time revealed-code panel. Use `VITE_PUBLIC_APP_URL` through `publicAppBaseUrl`, current camp name, and the placeholder `CAMP-XXXX`; do not hardcode Shenzhen or production host. Provide accessible “复制网页登录说明” and “复制 AI 部署说明” controls with fixed success/failure notices.
+
+Keep one-time codes only in component state as today. Do not attempt to reconstruct full codes from masked history. When new student codes are generated, keep the per-code copy buttons and replace the placeholder with the specific code. When teacher codes are generated, show only the existing raw-code/export actions.
+
+- [ ] **Step 4: Run frontend verification and verify GREEN**
+
+Run:
+
+```bash
+npx vitest run src/student-submission-entries.test.ts
+npm test -- --run
+npx tsc -b
+npm run build
+```
+
+Expected: focused and full tests pass, TypeScript exits 0, production build succeeds, and the guide remains usable at 320px width.
+
+- [ ] **Step 5: Commit Task 4**
+
+```bash
+git add web/src/pages/AdminInvitesPage.tsx web/src/student-submission-entries.test.ts web/src/styles.css
+git commit -m "feat: show student instructions to teachers"
+```
+
+### Task 5: Documentation, validation, and production release
 
 **Files:**
 - Modify: `README.md`
