@@ -1,5 +1,5 @@
 {
-  "name": "vibehub-skill-source",
+  "name": "vibehub-deploy-skill-source",
   "version": "1.0.0",
   "description": "让 AI 助手把网页游戏提交到 VibeHub 营地",
   "type": "module",

@@ -94,9 +94,9 @@ test('一条命令把同一份提示词和脚本安装到 Codex、Claude Code �
     });
     assert.equal(result.code, 0, result.stderr);
     const roots = [
-      join(home, '.agents', 'skills', 'vibehub'),
-      join(home, '.claude', 'skills', 'vibehub'),
-      join(home, '.codebuddy', 'skills', 'vibehub'),
+      join(home, '.agents', 'skills', 'vibehub-deploy'),
+      join(home, '.claude', 'skills', 'vibehub-deploy'),
+      join(home, '.codebuddy', 'skills', 'vibehub-deploy'),
     ];
     for (const root of roots) {
       for (const file of ['SKILL.md', 'AGENTS.md', 'distribution-files.mjs', 'bin/vibehub', 'lib/platform.mjs', 'agents/openai.yaml']) {
@@ -111,6 +111,22 @@ test('一条命令把同一份提示词和脚本安装到 Codex、Claude Code �
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('Skill 身份与 OpenAI 展示元数据统一为 VibeHub Deploy', () => {
+  const skillText = readFileSync(join(skillRoot, 'SKILL.md'), 'utf8');
+  const frontmatter = skillText.match(/^---\n([\s\S]*?)\n---/);
+  assert.ok(frontmatter, 'SKILL.md 应包含 YAML frontmatter');
+  assert.deepEqual(
+    frontmatter[1].split('\n').map((line) => line.slice(0, line.indexOf(':'))),
+    ['name', 'description'],
+  );
+  assert.match(frontmatter[1], /^name: vibehub-deploy$/m);
+
+  const openAiMetadata = readFileSync(join(skillRoot, 'agents', 'openai.yaml'), 'utf8');
+  assert.match(openAiMetadata, /^\s+display_name: "VibeHub Deploy"$/m);
+  assert.match(openAiMetadata, /\$vibehub-deploy\b/);
+  assert.doesNotMatch(openAiMetadata, /\$vibehub\b(?!-deploy)/);
 });
 
 test('安装器拒绝未知 Agent 且不创建目标目录', async () => {
@@ -129,7 +145,7 @@ test('安装器拒绝未知 Agent 且不创建目标目录', async () => {
 
 test('其他兼容 Agent 可以把完整 Skill 安装到自定义目录', async () => {
   const home = mkdtempSync(join(tmpdir(), 'vh-skill-install-custom-home-'));
-  const destination = join(home, 'my-agent', 'skills', 'vibehub');
+  const destination = join(home, 'my-agent', 'skills', 'vibehub-deploy');
   try {
     const result = await run(process.execPath, [join(skillRoot, 'bin/install.mjs'), '--dir', destination], {
       cwd: repoRoot, env: { ...process.env },
@@ -152,8 +168,9 @@ test('--dir 在任何复制或重命名前拒绝危险目录，且不破坏其�
     { label: 'Claude skills 根目录', target: (home) => join(home, '.claude', 'skills') },
     { label: 'WorkBuddy skills 根目录', target: (home) => join(home, '.codebuddy', 'skills') },
     { label: '明显宽泛的工作区目录', target: (home) => join(home, 'workspace') },
-    { label: '不在 skills 下的 vibehub 目录', target: (home) => join(home, 'projects', 'vibehub') },
-    { label: '名为 vibehub 的文件', target: (home) => join(home, 'custom-agent', 'skills', 'vibehub'), file: true },
+    { label: '旧技术名 Skill 目录', target: (home) => join(home, 'custom-agent', 'skills', 'vibehub') },
+    { label: '不在 skills 下的 vibehub-deploy 目录', target: (home) => join(home, 'projects', 'vibehub-deploy') },
+    { label: '名为 vibehub-deploy 的文件', target: (home) => join(home, 'custom-agent', 'skills', 'vibehub-deploy'), file: true },
   ];
 
   for (const entry of cases) {
@@ -171,7 +188,7 @@ test('--dir 在任何复制或重命名前拒绝危险目录，且不破坏其�
           cwd: repoRoot, env: { ...process.env },
         });
         assert.notEqual(result.code, 0);
-        assert.match(result.stderr, /自定义目录.*(?:skills.*vibehub|文件)/);
+        assert.match(result.stderr, /自定义目录.*(?:skills.*vibehub-deploy|文件)/);
         assert.doesNotMatch(result.stderr, /\n\s+at\s|install\.mjs:\d+/);
         assert.equal(readFileSync(join(sibling, 'SKILL.md'), 'utf8'), 'must survive');
         assert.equal(existsSync(join(home, '.vibehub', 'skill-backups')), false);
@@ -186,7 +203,7 @@ test('--dir 在任何复制或重命名前拒绝危险目录，且不破坏其�
 
 test('重复安装会备份已有 Skill 后再更新', async () => {
   const home = mkdtempSync(join(tmpdir(), 'vh-skill-install-backup-'));
-  const destination = join(home, '.agents', 'skills', 'vibehub');
+  const destination = join(home, '.agents', 'skills', 'vibehub-deploy');
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, 'SKILL.md'), 'student customization');
   try {
@@ -196,11 +213,30 @@ test('重复安装会备份已有 Skill 后再更新', async () => {
     assert.equal(result.code, 0, result.stderr);
     assert.doesNotMatch(readFileSync(join(destination, 'SKILL.md'), 'utf8'), /student customization/);
     const backupRoot = join(home, '.vibehub', 'skill-backups');
-    const backup = readdirSync(backupRoot).find((name) => name.startsWith('vibehub-'));
+    const backup = readdirSync(backupRoot).find((name) => name.startsWith('vibehub-deploy-'));
     assert.ok(backup, '应创建带时间戳的备份目录');
     assert.equal(readFileSync(join(backupRoot, backup, 'SKILL.md'), 'utf8'), 'student customization');
-    assert.equal(readdirSync(join(home, '.agents', 'skills')).some((name) => name.startsWith('vibehub.backup-')), false);
+    assert.equal(readdirSync(join(home, '.agents', 'skills')).some((name) => name.startsWith('vibehub-deploy.backup-')), false);
     assert.match(result.stdout, /已备份旧版本/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('安装新 Skill 时保留旧 skills/vibehub 且不自动迁移或覆盖', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'vh-skill-install-legacy-'));
+  const legacy = join(home, '.agents', 'skills', 'vibehub');
+  const destination = join(home, '.agents', 'skills', 'vibehub-deploy');
+  mkdirSync(legacy, { recursive: true });
+  writeFileSync(join(legacy, 'SKILL.md'), 'legacy student customization');
+  try {
+    const result = await run(process.execPath, [join(skillRoot, 'bin/install.mjs'), '--home', home, '--targets', 'codex'], {
+      cwd: repoRoot, env: { ...process.env },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(readFileSync(join(legacy, 'SKILL.md'), 'utf8'), 'legacy student customization');
+    assert.ok(existsSync(join(destination, 'SKILL.md')));
+    assert.equal(existsSync(join(home, '.vibehub', 'skill-backups')), false);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -213,7 +249,7 @@ for (const fault of [
   test(`${fault.label}时恢复已有版本、清理暂存目录并给出可操作提示`, async () => {
     const home = mkdtempSync(join(tmpdir(), `vh-skill-install-${fault.value}-`));
     const parent = join(home, '.agents', 'skills');
-    const destination = join(parent, 'vibehub');
+    const destination = join(parent, 'vibehub-deploy');
     mkdirSync(destination, { recursive: true });
     writeFileSync(join(destination, 'SKILL.md'), 'student customization');
     try {
@@ -223,7 +259,7 @@ for (const fault of [
       });
       assert.notEqual(result.code, 0);
       assert.equal(readFileSync(join(destination, 'SKILL.md'), 'utf8'), 'student customization');
-      assert.deepEqual(readdirSync(parent), ['vibehub']);
+      assert.deepEqual(readdirSync(parent), ['vibehub-deploy']);
       assert.match(result.stderr, /安装失败/);
       assert.match(result.stderr, /重试|检查/);
       assert.doesNotMatch(result.stderr, /\n\s+at\s|install\.mjs:\d+/);
@@ -295,7 +331,7 @@ test('自托管分发共享白名单不可变且拒绝危险路径', async () =>
 test('自托管分发源只保留私有本地版本元数据', () => {
   const pkg = JSON.parse(readFileSync(join(skillRoot, 'package.json'), 'utf8'));
   assert.deepEqual(pkg, {
-    name: 'vibehub-skill-source',
+    name: 'vibehub-deploy-skill-source',
     version: '1.0.0',
     description: '让 AI 助手把网页游戏提交到 VibeHub 营地',
     type: 'module',
@@ -364,7 +400,7 @@ test('在线安装从真实 HTTP 分发下载精确七个文件、转发参数�
 
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /安装完成/);
-  const installed = join(home, '.agents', 'skills', 'vibehub');
+  const installed = join(home, '.agents', 'skills', 'vibehub-deploy');
   for (const filePath of [
     'AGENTS.md',
     'SKILL.md',
@@ -399,7 +435,7 @@ test('在线安装在文件哈希被篡改时保护已有 Skill 并清理下载�
     return true;
   });
   const home = mkdtempSync(join(tmpdir(), 'vh-skill-online-existing-'));
-  const destination = join(home, '.agents', 'skills', 'vibehub');
+  const destination = join(home, '.agents', 'skills', 'vibehub-deploy');
   mkdirSync(destination, { recursive: true });
   writeFileSync(join(destination, 'SKILL.md'), 'student customization');
   t.after(() => rmSync(home, { recursive: true, force: true }));

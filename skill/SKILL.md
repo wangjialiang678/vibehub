@@ -1,5 +1,5 @@
 ---
-name: vibehub
+name: vibehub-deploy
 description: Use when 用户要把网页游戏或静态网站接入、提交、部署、预览或上线到 Vibe Hub/VibeHub，或查询营地、邀请码、审核状态及老师退回意见。
 ---
 

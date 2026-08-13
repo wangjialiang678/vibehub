@@ -7,9 +7,9 @@ import { DISTRIBUTION_FILES } from '../distribution-files.mjs';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const targetDefinitions = {
-  codex: { label: 'Codex', parts: ['.agents', 'skills', 'vibehub'] },
-  claude: { label: 'Claude Code', parts: ['.claude', 'skills', 'vibehub'] },
-  workbuddy: { label: 'WorkBuddy', parts: ['.codebuddy', 'skills', 'vibehub'] },
+  codex: { label: 'Codex', parts: ['.agents', 'skills', 'vibehub-deploy'] },
+  claude: { label: 'Claude Code', parts: ['.claude', 'skills', 'vibehub-deploy'] },
+  workbuddy: { label: 'WorkBuddy', parts: ['.codebuddy', 'skills', 'vibehub-deploy'] },
 };
 const files = DISTRIBUTION_FILES;
 
@@ -19,8 +19,8 @@ function fail(message) {
 }
 
 function validateCustomDir(destination) {
-  if (basename(destination) !== 'vibehub' || basename(dirname(destination)) !== 'skills') {
-    fail('自定义目录必须是完整的 Skill 根目录，路径格式应为 …/skills/vibehub。');
+  if (basename(destination) !== 'vibehub-deploy' || basename(dirname(destination)) !== 'skills') {
+    fail('自定义目录必须是完整的 Skill 根目录，路径格式应为 …/skills/vibehub-deploy。');
   }
   if (existsSync(destination)) {
     const destinationStat = lstatSync(destination);
@@ -43,7 +43,7 @@ function parseArgs(args) {
     else if (args[i] === '--targets') targets = String(args[++i] || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
     else if (args[i] === '--dir') customDirs.push(resolve(args[++i] || fail('--dir 后需要完整的 Skill 目录')));
     else if (args[i] === '--help' || args[i] === '-h') {
-      console.log('用法：vibehub-skill [--targets codex,claude,workbuddy] [--dir <其他 Agent 的 vibehub Skill 目录>]');
+      console.log('用法：vibehub-skill [--targets codex,claude,workbuddy] [--dir <其他 Agent 的 vibehub-deploy Skill 目录>]');
       process.exit(0);
     } else fail(`不认识的参数：${args[i]}`);
   }
