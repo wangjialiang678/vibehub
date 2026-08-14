@@ -43,6 +43,20 @@ CREATE TABLE IF NOT EXISTS camp_members (
   PRIMARY KEY (camp_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS camp_roster (
+  id TEXT PRIMARY KEY,
+  camp_id TEXT NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+  real_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  source TEXT NOT NULL DEFAULT 'teacher',       -- teacher|student
+  verification_status TEXT NOT NULL DEFAULT 'verified', -- verified|self_reported
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_camp_roster_camp ON camp_roster(camp_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_camp_roster_user ON camp_roster(user_id);
+
 CREATE TABLE IF NOT EXISTS invites (
   code TEXT PRIMARY KEY,
   camp_id TEXT NOT NULL REFERENCES camps(id),
@@ -221,5 +235,9 @@ ensureColumn('diagnoses', 'model_attempted_at', 'TEXT');
 ensureColumn('versions', 'rejected', 'TEXT');
 ensureColumn('projects', 'collection_order', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('projects', 'collection_recommended', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('invites', 'roster_entry_id', 'TEXT REFERENCES camp_roster(id)');
+ensureColumn('projects', 'realname_consent_at', 'TEXT');
+ensureColumn('projects', 'realname_consent_by', 'TEXT REFERENCES users(id)');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_roster_entry ON invites(roster_entry_id) WHERE roster_entry_id IS NOT NULL');
 
 export const now = () => new Date().toISOString();

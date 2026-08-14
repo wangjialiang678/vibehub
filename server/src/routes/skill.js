@@ -115,13 +115,13 @@ export default async function skillRoutes(app, {
 }) {
   // ── 绑定：邀请码换凭证。入口，无需鉴权 ────────────────────────────
   app.post('/api/skill/bind', async (req, reply) => {
-    const { code, device_name } = req.body || {};
+    const { code, device_name, real_name, display_name } = req.body || {};
     if (!code) return err(reply, 'missing_code', 400, '请提供邀请码。', '用法：vibehub bind <邀请码>');
     const normalized = normalizeInviteCode(code);
     if (inviteLimiter.isBlocked(req.ip, normalized)) {
       return err(reply, 'invite_rate_limited', 429, '尝试次数太多，请 10 分钟后再试。');
     }
-    const result = bindInvite(normalized, { kind: 'skill', deviceName: device_name || '未命名设备' });
+    const result = bindInvite(normalized, { kind: 'skill', deviceName: device_name || '未命名设备', realName: real_name, displayName: display_name });
     if (result.error) {
       inviteLimiter.recordFailure(req.ip, normalized);
       return err(reply, ...result.error);

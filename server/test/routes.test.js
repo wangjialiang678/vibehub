@@ -139,7 +139,7 @@ async function bindStudent(campId, appInstance = app) {
   db.prepare(`INSERT INTO invites (code,camp_id,role,status,max_devices,created_at)
               VALUES (?,?,'student','unused',3,?)`).run(code, campId, now());
   const response = await appInstance.inject({
-    method: 'POST', url: '/api/skill/bind', payload: { code, device_name: '测试设备' },
+    method: 'POST', url: '/api/skill/bind', payload: { code, device_name: '测试设备', real_name: `测试学员${sequence}`, display_name: `创作者${sequence}` },
   });
   assert.equal(response.statusCode, 200);
   return { code, ...response.json() };

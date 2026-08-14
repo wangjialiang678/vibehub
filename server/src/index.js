@@ -19,6 +19,7 @@ import { cleanupTmp, diskHealth, pruneProjectArtifacts, recoverPruneQuarantines 
 import { authorizePreviewRequest, createPreviewGrant, previewCookieName } from './services/preview-access.js';
 import { requestUrlForLog } from './lib/preview-claims.js';
 import { bindInvite, InviteRateLimiter, normalizeInviteCode } from './services/invite-access.js';
+import { IdentityError, profileForUser, updateOwnProfile } from './services/student-identity.js';
 
 const MIME = { '.html': 'text/html', '.htm': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.mjs': 'application/javascript', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
@@ -143,7 +144,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     if (inviteLimiter.isBlocked(req.ip, code)) {
       return reply.code(429).send({ error: { code: 'invite_rate_limited', message: '尝试次数太多，请 10 分钟后再试。' } });
     }
-    const data = bindInvite(code, { kind: 'web', deviceName: '网页' });
+    const data = bindInvite(code, { kind: 'web', deviceName: '网页', realName: req.body?.real_name, displayName: req.body?.display_name });
     if (data.error) {
       inviteLimiter.recordFailure(req.ip, code);
       const [errorCode, status, message, hint] = data.error;
@@ -163,9 +164,18 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   });
 
   app.get('/api/me', { preHandler: authRequired() }, async (req) => {
-    const user = db.prepare('SELECT id,username,display_name,avatar_url FROM users WHERE id=?').get(req.auth.user_id);
+    const user = db.prepare('SELECT id,username,display_name,real_name,avatar_url FROM users WHERE id=?').get(req.auth.user_id);
     const camp = db.prepare('SELECT id,slug,name,kind FROM camps WHERE id=?').get(req.auth.camp_id);
-    return { user, camp, role: req.auth.role, project_id: req.auth.project_id };
+    return { user, profile: profileForUser(req.auth.user_id, req.auth.camp_id), camp, role: req.auth.role, project_id: req.auth.project_id };
+  });
+
+  app.patch('/api/me/profile', { preHandler: authRequired(['student']) }, async (req, reply) => {
+    try {
+      return updateOwnProfile({ userId: req.auth.user_id, campId: req.auth.camp_id, input: req.body || {} });
+    } catch (error) {
+      if (error instanceof IdentityError) return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
+      throw error;
+    }
   });
 
   app.post('/api/previews/:pid/grant', { preHandler: authRequired() }, async (req, reply) => {
