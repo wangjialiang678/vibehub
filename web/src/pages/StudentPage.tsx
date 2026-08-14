@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { api, readableError } from '../lib/api';
+import { ApiError, api, readableError } from '../lib/api';
 import { AppShell, ModeTabs } from '../components/Shell';
 import { SubmissionCta } from '../components/SubmissionCta';
 import { LoginRequired, PageState, PreviewFrame, StatusPill, copyToClipboard, useQrCode } from '../components/Ui';
@@ -13,13 +13,16 @@ import type { DiagnosisItem, ProjectSnapshot } from '../lib/types';
 export function StudentPage() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, retry: false });
   const pageVisible = usePageVisibility();
-  const project = useQuery({ queryKey: ['project', me.data?.project_id], queryFn: () => api.project(me.data!.project_id!), enabled: Boolean(me.data?.project_id), retry: false, refetchInterval: (query) => getProjectPollInterval({ visible: pageVisible, diagnosis: (query.state.data as ProjectSnapshot | undefined)?.latest_diagnosis }) });
+  const project = useQuery({ queryKey: ['project', me.data?.project_id], queryFn: () => api.project(me.data!.project_id!), enabled: Boolean(me.data?.project_id), retry: false, refetchInterval: (query) => {
+    const snapshot = query.state.data as ProjectSnapshot | undefined;
+    return getProjectPollInterval({ visible: pageVisible, diagnosis: snapshot?.latest_diagnosis, pending: Boolean(snapshot?.pending_version) });
+  } });
   if (me.isPending) return <PageState />;
   if (me.isError) return <LoginRequired />;
   if (!me.data.project_id) return <NoProject campSlug={me.data.camp.slug} />;
   if (project.isPending) return <PageState title="正在打开你的项目…" />;
   if (project.isError) return <PageState error={project.error} action={<Link className="button button-coral" to="/login">重新登录</Link>} />;
-  return <StudentDashboard snapshot={project.data} userName={me.data.user.display_name} />;
+  return <StudentDashboard snapshot={project.data} userName={me.data.user.display_name} refreshProject={() => project.refetch().then(() => undefined)} />;
 }
 
 function NoProject({ campSlug }: { campSlug: string }) {
@@ -48,6 +51,7 @@ type StudentPreviewDependencies = {
     close: () => void;
   } | null;
   setNotice: (notice: string) => void;
+  refreshProject?: () => Promise<void>;
 };
 
 function previewId(url: string) {
@@ -65,24 +69,35 @@ export async function openStudentPreview(url: string, dependencies: StudentPrevi
     const pid = previewId(url);
     const destination = pid ? (await dependencies.grantPreview(pid)).preview_url : url;
     child.location.replace(destination);
-  } catch {
+  } catch (error) {
     child.close();
+    if (error instanceof ApiError && error.status === 404 && dependencies.refreshProject) {
+      dependencies.setNotice('作品状态刚刚变化，正在同步最新地址…');
+      await dependencies.refreshProject();
+      return;
+    }
     dependencies.setNotice('这个预览暂时打不开。');
   }
 }
 
-export function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnapshot; userName: string }) {
+export function StudentDashboard({ snapshot, userName, refreshProject }: { snapshot: ProjectSnapshot; userName: string; refreshProject?: () => Promise<void> }) {
   const { project, camp, pending_version: pending, live_version: live, latest_diagnosis: diagnosis, stats, timeline, last_review: review } = snapshot;
   const previewUrl = pending?.preview_url || project.live_url || null;
   const status = getProjectStatus({ publish_status: project.publish_status, pending_version: pending, last_review: review });
   const qrImage = useQrCode(project.live_url);
   const [notice, setNotice] = useState<string | null>(null);
+  const handleStalePreview = useCallback(async () => {
+    if (!refreshProject) return;
+    setNotice('作品状态刚刚变化，正在同步最新地址…');
+    await refreshProject();
+  }, [refreshProject]);
   const openPreview = () => {
     if (!previewUrl) return;
     void openStudentPreview(previewUrl, {
       grantPreview: api.previewGrant,
       openWindow: (url, target) => window.open(url, target),
       setNotice,
+      refreshProject,
     });
   };
   const copy = () => {
@@ -99,7 +114,7 @@ export function StudentDashboard({ snapshot, userName }: { snapshot: ProjectSnap
       <section className="student-top-grid">
         <article className="panel work-panel">
           <PanelKicker kicker="我的作品" title="现在的项目长这样" icon="✧" action={previewUrl ? <button type="button" className="panel-link-button" onClick={openPreview}>打开预览 ↗</button> : undefined} />
-          <PreviewFrame url={previewUrl} title={`${project.title} 的预览`} className="student-preview" />
+          <PreviewFrame url={previewUrl} title={`${project.title} 的预览`} className="student-preview" onStale={refreshProject ? handleStalePreview : undefined} />
         </article>
         <aside className="student-side-stack">
           <AccessPanel url={project.live_url} qrImage={qrImage} onCopy={copy} />

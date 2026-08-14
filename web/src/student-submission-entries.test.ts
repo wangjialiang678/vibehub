@@ -111,6 +111,20 @@ describe('学员提交入口', () => {
     expect(setNotice.mock.calls.flat().join('')).not.toMatch(/server-secret|claim=/);
   });
 
+  it('待审预览刚被审核失效时刷新项目状态并给出同步提示', async () => {
+    const grantPreview = vi.fn(async () => { throw new ApiError(404, '找不到这个预览'); });
+    const child = { opener: {} as unknown, location: { replace: vi.fn() }, close: vi.fn() };
+    const openWindow = vi.fn(() => child);
+    const setNotice = vi.fn();
+    const refreshProject = vi.fn(async () => undefined);
+
+    await openStudentPreview('https://works.example/vibehub/_preview/preview2/', { grantPreview, openWindow, setNotice, refreshProject });
+
+    expect(child.close).toHaveBeenCalledOnce();
+    expect(refreshProject).toHaveBeenCalledOnce();
+    expect(setNotice).toHaveBeenCalledWith('作品状态刚刚变化，正在同步最新地址…');
+  });
+
   it('在项目标题区渲染提交入口和待审替代说明', () => {
     const html = render(createElement(StudentSubmissionHeadingActions, { pending: true, live: true, rejected: false, campSlug: 'summer' }));
     expect(html).toContain('href="/app/submit"');

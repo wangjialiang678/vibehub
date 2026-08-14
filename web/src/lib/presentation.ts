@@ -111,6 +111,6 @@ export function postLoginPath(role: string | null | undefined): '/app' | '/admin
   return role === 'teacher' || role === 'admin' ? '/admin' : '/app';
 }
 
-export function getProjectPollInterval({ visible, diagnosis }: { visible: boolean; diagnosis?: { status?: string; stale?: boolean } | null }): number | false {
-  return visible && (diagnosis?.status === 'running' || diagnosis?.stale === true) ? 3000 : false;
+export function getProjectPollInterval({ visible, diagnosis, pending = false }: { visible: boolean; diagnosis?: { status?: string; stale?: boolean } | null; pending?: boolean }): number | false {
+  return visible && (pending || diagnosis?.status === 'running' || diagnosis?.stale === true) ? 3000 : false;
 }

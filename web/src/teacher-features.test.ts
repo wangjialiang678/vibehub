@@ -10,13 +10,15 @@ describe('老师端 P0 功能', () => {
     const getPollInterval = Reflect.get(presentation, 'getProjectPollInterval') as undefined | ((input: {
       visible: boolean;
       diagnosis?: { status?: string; stale?: boolean } | null;
+      pending?: boolean;
     }) => number | false);
 
     expect(getPollInterval).toEqual(expect.any(Function));
     expect(getPollInterval?.({ visible: true, diagnosis: { status: 'running' } })).toBe(3000);
     expect(getPollInterval?.({ visible: true, diagnosis: { stale: true } })).toBe(3000);
+    expect(getPollInterval?.({ visible: true, diagnosis: { status: 'ready' }, pending: true })).toBe(3000);
     expect(getPollInterval?.({ visible: false, diagnosis: { status: 'running' } })).toBe(false);
-    expect(getPollInterval?.({ visible: true, diagnosis: { status: 'ready' } })).toBe(false);
+    expect(getPollInterval?.({ visible: true, diagnosis: { status: 'ready' }, pending: false })).toBe(false);
   });
 
   it('removes query-token login and routes the teacher workspace through its four pages', () => {

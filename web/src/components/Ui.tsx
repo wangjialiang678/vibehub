@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import QRCode from 'qrcode';
 import { Link } from 'react-router-dom';
-import { api, readableError } from '../lib/api';
+import { ApiError, api, readableError } from '../lib/api';
 
 export function PageState({ title = '正在加载…', error, action }: { title?: string; error?: unknown; action?: ReactNode }) {
   return (
@@ -30,16 +30,16 @@ export function StatusPill({ children, tone = 'muted' }: { children: ReactNode; 
   return <span className={`status-pill status-${tone}`}>{children}</span>;
 }
 
-export function PreviewFrame({ url, title, className = '' }: { url?: string | null; title: string; className?: string }) {
+export function PreviewFrame({ url, title, className = '', onStale }: { url?: string | null; title: string; className?: string; onStale?: () => void | Promise<void> }) {
   if (!url) return <div className={`preview-empty ${className}`}><span>◇</span><p>还没有可展示的预览版本</p><small>完成一次提交后，这里会显示你的真实网页。</small></div>;
-  return <PreviewFrameContent url={url} title={title} className={className} />;
+  return <PreviewFrameContent url={url} title={title} className={className} onStale={onStale} />;
 }
 
 function previewId(url: string) {
   try { return /\/vibehub\/_preview\/([a-z0-9]+)\//i.exec(new URL(url).pathname)?.[1] || null; } catch { return null; }
 }
 
-function PreviewFrameContent({ url, title, className }: { url: string; title: string; className: string }) {
+function PreviewFrameContent({ url, title, className, onStale }: { url: string; title: string; className: string; onStale?: () => void | Promise<void> }) {
   const pid = previewId(url);
   const [grant, setGrant] = useState<{ source: string; url?: string; error?: string } | null>(null);
   useEffect(() => {
@@ -48,9 +48,17 @@ function PreviewFrameContent({ url, title, className }: { url: string; title: st
     setGrant(null);
     api.previewGrant(pid)
       .then((result) => { if (active) setGrant({ source: url, url: result.preview_url }); })
-      .catch((error) => { if (active) setGrant({ source: url, error: readableError(error, '这个预览已失效。') }); });
+      .catch((error) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 404 && onStale) {
+          setGrant({ source: url, error: '作品状态刚刚变化，正在同步最新地址…' });
+          void onStale();
+          return;
+        }
+        setGrant({ source: url, error: readableError(error, '这个预览已失效。') });
+      });
     return () => { active = false; };
-  }, [pid, url]);
+  }, [onStale, pid, url]);
   if (pid && grant?.source !== url) return <div className={`preview-empty ${className}`}><span>◇</span><p>正在准备安全预览…</p><small>只会向项目本人和本课程老师开放。</small></div>;
   if (pid && grant?.error) return <div className={`preview-empty ${className}`}><span>!</span><p>这个预览暂时打不开</p><small>{grant.error}</small></div>;
   const safeUrl = pid ? grant?.url : url;
