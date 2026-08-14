@@ -32,7 +32,7 @@ beforeEach(reset);
 after(() => rmSync(dataDir, { recursive: true, force: true }));
 
 test('姓名规范化拒绝空值、控制字符和超长内容', () => {
-  assert.equal(normalizeStudentName('  王梓潼  ', 'real_name'), '王梓潼');
+  assert.equal(normalizeStudentName('  王同学  ', 'real_name'), '王同学');
   assert.throws(() => normalizeStudentName('', 'real_name'), IdentityError);
   assert.throws(() => normalizeStudentName('坏\u0000名字', 'real_name'), IdentityError);
   assert.throws(() => normalizeStudentName('学'.repeat(41), 'display_name'), IdentityError);
