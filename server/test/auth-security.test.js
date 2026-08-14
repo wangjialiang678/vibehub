@@ -223,3 +223,40 @@ test('学员可改昵称，自填姓名确认前可修正，老师确认后姓�
   assert.equal(locked.statusCode, 409);
   assert.equal(locked.json().error.code, 'real_name_locked');
 });
+
+test('老师可按名单生成邀请码、补录旧码并确认学员身份', async () => {
+  const camp = createCamp();
+  const teacher = teacherToken(camp.id);
+  const headers = { authorization: `Bearer ${teacher}` };
+  const generated = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/invites`, headers,
+    payload: { role: 'student', max_devices: 3, names: ['李同学', '王同学'] },
+  });
+  assert.equal(generated.statusCode, 201);
+  assert.equal(generated.json().codes.length, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_roster WHERE camp_id=?').get(camp.id).n, 2);
+
+  insertInvite(camp.id, 'HISTORICAL-CODE');
+  const imported = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/roster/import`, headers,
+    payload: { entries: [{ real_name: '补录学员', display_name: '补录昵称', code: 'HISTORICAL-CODE' }] },
+  });
+  assert.equal(imported.statusCode, 200);
+
+  const listed = await app.inject({ method: 'GET', url: `/api/camps/${camp.id}/roster`, headers });
+  assert.equal(listed.statusCode, 200);
+  assert.equal(listed.json().items.length, 3);
+  assert.ok(listed.json().items.every((item) => !item.code || item.code.startsWith('····-')));
+  const row = listed.json().items.find((item) => item.real_name === '补录学员');
+  const updated = await app.inject({
+    method: 'PATCH', url: `/api/camps/${camp.id}/roster/${row.id}`, headers,
+    payload: { display_name: '新公开昵称', verified: true },
+  });
+  assert.equal(updated.statusCode, 200);
+  assert.equal(updated.json().display_name, '新公开昵称');
+  assert.equal(updated.json().verification_status, 'verified');
+
+  const other = createCamp();
+  const forbidden = await app.inject({ method: 'GET', url: `/api/camps/${other.id}/roster`, headers });
+  assert.equal(forbidden.statusCode, 404);
+});

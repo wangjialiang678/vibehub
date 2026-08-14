@@ -241,3 +241,14 @@ sudo systemctl is-active vibehub
 ```bash
 sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".backup /var/lib/vibehub/backup/db-$(date +%F).sqlite"
 ```
+
+### 名单回填
+
+名单回填必须在上述在线备份成功后进行。输入从标准输入传给脚本，不把真实姓名和邀请码保存在 release、shell 历史或普通日志中：
+
+```bash
+sudo -u vibehub VIBEHUB_DATA_DIR=/var/lib/vibehub \
+  node /opt/vibehub/scripts/import-roster.mjs --camp <camp-slug> < /path/to/protected-roster.json
+```
+
+输入结构为 `{"entries":[{"real_name":"…","display_name":"…","code":"…"}]}`。脚本只输出处理数、创建数和关联数，不输出姓名或邀请码；每个邀请码必须已存在且属于目标营地。重复执行不会重复创建已关联记录，也不会改动项目、版本、审核或 token。完成后立即删除受保护的临时输入，并通过管理端名单页核对人数、已绑定状态与剩余备用码。

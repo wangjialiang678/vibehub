@@ -1,6 +1,8 @@
 import { after, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -77,4 +79,19 @@ test('老师只能修改本营地名单并写入审计日志', () => {
   assert.equal(updated.real_name, '新姓名');
   assert.equal(updated.verification_status, 'verified');
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM audit_logs WHERE action='roster_update' AND target_id=?`).get(id).n, 1);
+});
+
+test('命令行导入只输出数量且可安全重复执行', () => {
+  db.prepare(`INSERT INTO invites (code,camp_id,role,status,max_devices,created_at)
+              VALUES ('AIGAME-PRIVATE01','camp-one','student','unused',3,?)`).run(now());
+  const input = JSON.stringify({ entries: [{ real_name: '不应输出的姓名', display_name: '安全昵称', code: 'AIGAME-PRIVATE01' }] });
+  const script = fileURLToPath(new URL('../scripts/import-roster.mjs', import.meta.url));
+  for (let i = 0; i < 2; i++) {
+    const result = spawnSync(process.execPath, [script, '--camp', 'shenzhen'], {
+      input, encoding: 'utf8', env: { ...process.env, VIBEHUB_DATA_DIR: dataDir },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(`${result.stdout}${result.stderr}`, /不应输出的姓名|AIGAME-PRIVATE01/);
+  }
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM camp_roster WHERE camp_id=?').get('camp-one').n, 1);
 });

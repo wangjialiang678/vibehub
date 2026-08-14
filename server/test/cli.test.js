@@ -355,6 +355,39 @@ test('help 正常退出且不输出异常堆栈', async () => {
   assert.equal(result.stderr, '');
 });
 
+test('bind 可把真实姓名和公开昵称交给平台且不把真实姓名写入凭证', async () => {
+  let received;
+  const server = createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      received = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        token: 'profile-token', camp: { id: 'c1', slug: 'camp', name: '测试营' },
+        project: { id: 'p1', title: '作品' },
+        user: { id: 'u1', username: 'student', real_name: '真实学员', display_name: '公开昵称' },
+        message: '已连接到《测试营》',
+      }));
+    });
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-profile-home-');
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'bind', 'CAMP-CODE', '--name', '真实学员', '--nickname', '公开昵称'], {
+      cwd: resolve('..'), env: { ...process.env, HOME: home, VIBEHUB_API: api },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(received.real_name, '真实学员');
+    assert.equal(received.display_name, '公开昵称');
+    const saved = readFileSync(join(home, '.vibehub', 'credentials.json'), 'utf8');
+    assert.doesNotMatch(saved, /真实学员/);
+    assert.match(saved, /公开昵称/);
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});
+
 test('重复绑定不同营地后可以列出并切换当前营地', async () => {
   const tokens = new Map([
     ['CAMP-ONE', { token: 'token-one', camp: { id: 'c1', slug: 'camp-one', name: '一号营' }, project: { id: 'p1', title: '作品一' } }],

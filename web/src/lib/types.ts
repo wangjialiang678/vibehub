@@ -1,7 +1,8 @@
 export type Role = 'student' | 'teacher' | 'admin' | string;
 
 export interface MeResponse {
-  user: { id: string; username: string; display_name: string; avatar_url?: string | null };
+  user: { id: string; username: string; display_name: string; real_name?: string | null; avatar_url?: string | null };
+  profile?: { id: string; source: 'teacher' | 'student'; verification_status: 'verified' | 'self_reported' } | null;
   camp: { id: string; slug: string; name: string; kind: string };
   role: Role;
   project_id: string | null;
@@ -140,7 +141,21 @@ export interface CollectionUpdate {
 export interface InviteListItem {
   code_masked: string; status: 'unused' | 'bound' | 'revoked' | string; role: 'student' | 'teacher' | string;
   max_devices: number; devices: number; created_at?: string | null; bound_at?: string | null;
-  bound_user?: string | null; bound_project?: string | null;
+  bound_user?: string | null; bound_user_nickname?: string | null; intended_user?: string | null;
+  verification_status?: 'verified' | 'self_reported' | null; bound_project?: string | null;
+}
+
+export interface RosterEntry {
+  id: string;
+  real_name: string;
+  display_name: string;
+  source: 'teacher' | 'student';
+  verification_status: 'verified' | 'self_reported';
+  code?: string | null;
+  invite_status?: string | null;
+  bound_project_id?: string | null;
+  project_title?: string | null;
+  user_id?: string | null;
 }
 
 export interface ReviewDetail {

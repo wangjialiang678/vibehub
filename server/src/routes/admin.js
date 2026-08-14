@@ -4,6 +4,7 @@ import { authRequired, assertProjectAccess, isTeacher, revokeInviteAndTokens } f
 import { publishVersion, suspendSite } from '../services/publish.js';
 import { projectSnapshot, versionView, diagnosisView } from './_shared.js';
 import { pruneProjectArtifacts } from '../services/storage.js';
+import { IdentityError, importRosterEntries, listRosterEntries, normalizeStudentName, safeGeneratedNickname, updateRosterEntry } from '../services/student-identity.js';
 
 // 邀请码去掉易混字符 0/O/1/I/L
 const codeGen = customAlphabet('ABCDEFGHJKMNPQRSTUVWXYZ23456789', 10);
@@ -37,14 +38,14 @@ export default async function adminRoutes(app) {
 
     // 长期没动静的项目
     const stale = db.prepare(`
-      SELECT p.id, p.title, p.updated_at, u.display_name AS owner
+      SELECT p.id, p.title, p.updated_at, COALESCE(u.real_name,u.display_name) AS owner, u.display_name AS owner_nickname
       FROM projects p JOIN users u ON u.id = p.owner_user_id
       WHERE p.camp_id = ? AND p.updated_at < datetime('now', ?)
       ORDER BY p.updated_at ASC LIMIT 20
     `).all(campId, `-${camp.stale_days} days`);
 
     const recent = db.prepare(`
-      SELECT p.id, p.title, p.dev_status, p.publish_status, p.updated_at, u.display_name AS owner
+      SELECT p.id, p.title, p.dev_status, p.publish_status, p.updated_at, COALESCE(u.real_name,u.display_name) AS owner, u.display_name AS owner_nickname
       FROM projects p JOIN users u ON u.id = p.owner_user_id
       WHERE p.camp_id = ? ORDER BY p.updated_at DESC LIMIT 20
     `).all(campId);
@@ -56,7 +57,7 @@ export default async function adminRoutes(app) {
     if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
     return {
       items: db.prepare(`
-        SELECT p.*, u.display_name AS owner_name, u.username AS owner_username
+        SELECT p.*, COALESCE(u.real_name,u.display_name) AS owner_name, u.display_name AS owner_nickname, u.username AS owner_username
         FROM projects p JOIN users u ON u.id=p.owner_user_id
         WHERE p.camp_id=? ORDER BY p.updated_at DESC`).all(req.params.campId),
     };
@@ -66,18 +67,41 @@ export default async function adminRoutes(app) {
   app.post('/api/camps/:campId/invites', { preHandler: teacherOnly }, async (req, reply) => {
     if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
     const { count = 1, role = 'student', max_devices = 3, expires_at = null } = req.body || {};
-    const n = Math.min(Math.max(Number(count) || 1, 1), 200);
+    const rawNames = Array.isArray(req.body?.names) && role === 'student' ? req.body.names : [];
+    let names;
+    try { names = rawNames.map((name) => normalizeStudentName(name, 'real_name')); }
+    catch (error) {
+      if (error instanceof IdentityError) return err(reply, error.code, error.status, error.message);
+      throw error;
+    }
+    const n = names.length || Math.min(Math.max(Number(count) || 1, 1), 200);
+    if (n > 200) return err(reply, 'invalid_roster', 400, '一次最多生成 200 个邀请码。');
     const camp = db.prepare('SELECT slug FROM camps WHERE id=?').get(req.params.campId);
     const prefix = (camp.slug || 'CAMP').replace(/[^a-zA-Z]/g, '').slice(0, 6).toUpperCase() || 'CAMP';
     const created = [];
     for (let i = 0; i < n; i++) {
       let code;
       do { code = `${prefix}-${codeGen()}`; }
-      while (db.prepare('SELECT 1 FROM invites WHERE code=?').get(code));
-      db.prepare(`INSERT INTO invites (code,camp_id,role,status,max_devices,expires_at,created_at)
-                  VALUES (?,?,?,'unused',?,?,?)`)
-        .run(code, req.params.campId, role, max_devices, expires_at, now());
+      while (created.includes(code) || db.prepare('SELECT 1 FROM invites WHERE code=?').get(code));
       created.push(code);
+    }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const code of created) {
+        db.prepare(`INSERT INTO invites (code,camp_id,role,status,max_devices,expires_at,created_at)
+                    VALUES (?,?,?,'unused',?,?,?)`)
+          .run(code, req.params.campId, role, max_devices, expires_at, now());
+      }
+      if (names.length) {
+        importRosterEntries({ campId: req.params.campId, actorUserId: req.auth.user_id,
+          entries: names.map((realName, index) => ({ real_name: realName, display_name: safeGeneratedNickname(index + 1), code: created[index] })),
+          manageTransaction: false });
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 没有活动事务 */ }
+      if (error instanceof IdentityError) return err(reply, error.code, error.status, error.message);
+      throw error;
     }
     // 明码只在这里出现一次
     return reply.code(201).send({ codes: created, message: `已生成 ${created.length} 个邀请码。明码只显示这一次，请立刻导出保存。` });
@@ -88,16 +112,21 @@ export default async function adminRoutes(app) {
     // 列表脱敏：只回显后 4 位
     const rows = db.prepare(`
       SELECT i.code, i.status, i.role, i.max_devices, i.created_at, i.bound_at,
-             u.display_name AS bound_user, p.title AS bound_project
+             COALESCE(u.real_name,u.display_name) AS bound_user, u.display_name AS bound_user_nickname,
+             r.real_name AS intended_user, r.verification_status,
+             p.title AS bound_project
       FROM invites i
       LEFT JOIN users u ON u.id=i.bound_user_id
+      LEFT JOIN camp_roster r ON r.id=i.roster_entry_id
       LEFT JOIN projects p ON p.id=i.bound_project_id
       WHERE i.camp_id=? ORDER BY i.created_at DESC`).all(req.params.campId);
     return {
       items: rows.map((r) => ({
         code_masked: '····-' + r.code.slice(-4),
         status: r.status, role: r.role, max_devices: r.max_devices,
-        bound_user: r.bound_user, bound_project: r.bound_project,
+        bound_user: r.bound_user, bound_user_nickname: r.bound_user_nickname,
+        intended_user: r.intended_user, verification_status: r.verification_status,
+        bound_project: r.bound_project,
         created_at: r.created_at, bound_at: r.bound_at,
         devices: db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code=? AND kind='skill'
                              AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)`).get(r.code, now()).n,
@@ -105,13 +134,45 @@ export default async function adminRoutes(app) {
     };
   });
 
+  app.get('/api/camps/:campId/roster', { preHandler: teacherOnly }, async (req, reply) => {
+    if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
+    return { items: listRosterEntries(req.params.campId).map((item) => ({
+      ...item,
+      code: item.code ? '····-' + item.code.slice(-4) : null,
+    })) };
+  });
+
+  app.post('/api/camps/:campId/roster/import', { preHandler: teacherOnly }, async (req, reply) => {
+    if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
+    try {
+      const result = importRosterEntries({ campId: req.params.campId, entries: req.body?.entries, actorUserId: req.auth.user_id });
+      return { created: result.created, items: result.items.map((item) => ({ ...item, code: item.code ? '····-' + item.code.slice(-4) : null })) };
+    } catch (error) {
+      if (error instanceof IdentityError) return err(reply, error.code, error.status, error.message);
+      throw error;
+    }
+  });
+
+  app.patch('/api/camps/:campId/roster/:id', { preHandler: teacherOnly }, async (req, reply) => {
+    if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
+    try {
+      const item = updateRosterEntry({ campId: req.params.campId, rosterId: req.params.id, input: req.body || {}, actorUserId: req.auth.user_id });
+      return { ...item, code: item.code ? '····-' + item.code.slice(-4) : null };
+    } catch (error) {
+      if (error instanceof IdentityError) return err(reply, error.code, error.status, error.message);
+      throw error;
+    }
+  });
+
   app.get('/api/camps/:campId/invites/export', { preHandler: teacherOnly }, async (req, reply) => {
     if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
-    const rows = db.prepare(`SELECT code,role,status,max_devices,expires_at,created_at FROM invites
-                             WHERE camp_id=? ORDER BY created_at DESC`).all(req.params.campId);
+    const rows = db.prepare(`SELECT i.code,i.role,i.status,i.max_devices,i.expires_at,i.created_at,
+                                    r.real_name,r.display_name,r.verification_status
+                             FROM invites i LEFT JOIN camp_roster r ON r.id=i.roster_entry_id
+                             WHERE i.camp_id=? ORDER BY i.created_at DESC`).all(req.params.campId);
     const quote = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
-    const csv = ['邀请码,角色,状态,设备上限,过期时间,创建时间', ...rows.map((row) =>
-      [row.code, row.role, row.status, row.max_devices, row.expires_at, row.created_at].map(quote).join(','))].join('\r\n');
+    const csv = ['邀请码,角色,状态,真实姓名,公开昵称,确认状态,设备上限,过期时间,创建时间', ...rows.map((row) =>
+      [row.code, row.role, row.status, row.real_name, row.display_name, row.verification_status, row.max_devices, row.expires_at, row.created_at].map(quote).join(','))].join('\r\n');
     db.prepare(`INSERT INTO audit_logs (id,camp_id,actor_user_id,action,target_type,target_id,detail,created_at)
                 VALUES (?,?,?,?,?,?,?,?)`)
       .run('audit_' + nanoid(12), req.params.campId, req.auth.user_id, 'invite_export', 'camp', req.params.campId,
@@ -134,7 +195,7 @@ export default async function adminRoutes(app) {
     const rows = db.prepare(`
       SELECT r.*, v.label, v.summary, v.preview_id, v.submitted_at AS v_submitted_at,
              p.title AS project_title, p.slug AS project_slug,
-             u.display_name AS owner_name, u.username AS owner_username, u.avatar_url
+             COALESCE(u.real_name,u.display_name) AS owner_name, u.display_name AS owner_nickname, u.username AS owner_username, u.avatar_url
       FROM reviews r
       JOIN versions v ON v.id=r.version_id
       JOIN projects p ON p.id=r.project_id
@@ -149,7 +210,7 @@ export default async function adminRoutes(app) {
     return {
       items: rows.map((r) => ({
         id: r.id, version_id: r.version_id, project_id: r.project_id,
-        project_title: r.project_title, owner_name: r.owner_name,
+        project_title: r.project_title, owner_name: r.owner_name, owner_nickname: r.owner_nickname,
         owner_username: r.owner_username, avatar_url: r.avatar_url,
         label: r.label, summary: r.summary,
         created_at: r.created_at, status: r.status,
@@ -246,7 +307,26 @@ export default async function adminRoutes(app) {
     if (visibility !== null && !['nickname', 'realname', 'camp_only'].includes(visibility)) {
       return err(reply, 'invalid_visibility', 400, '可见性设置不正确。', '可选 nickname、realname、camp_only，或传 null 恢复课程默认值');
     }
-    db.prepare('UPDATE projects SET visibility=?,updated_at=? WHERE id=?').run(visibility, now(), project.id);
+    if (visibility === 'realname' && req.body?.consent_confirmed !== true) {
+      return err(reply, 'realname_consent_required', 409, '公开真实姓名前，需要确认已获得学员同意。');
+    }
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare(`UPDATE projects SET visibility=?,updated_at=?,
+                  realname_consent_at=CASE WHEN ?='realname' THEN ? ELSE realname_consent_at END,
+                  realname_consent_by=CASE WHEN ?='realname' THEN ? ELSE realname_consent_by END WHERE id=?`)
+        .run(visibility, now(), visibility, now(), visibility, req.auth.user_id, project.id);
+      if (visibility === 'realname') {
+        db.prepare(`INSERT INTO audit_logs (id,camp_id,actor_user_id,action,target_type,target_id,detail,created_at)
+                    VALUES (?,?,?,?,?,?,?,?)`)
+          .run('audit_' + nanoid(12), project.camp_id, req.auth.user_id, 'realname_publication_consent', 'project', project.id,
+            JSON.stringify({ confirmed: true }), now());
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* 没有活动事务 */ }
+      throw error;
+    }
     return { ok: true, visibility, message: visibility === null ? '已恢复课程默认可见性。' : '作品可见性已更新。' };
   });
 

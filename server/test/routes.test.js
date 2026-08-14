@@ -1386,6 +1386,12 @@ test('老师可下线恢复作品、设置可见性、排序集合并导出带�
   assert.equal(resumed.statusCode, 200);
   const visibility = await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}/visibility`, headers: { authorization: `Bearer ${token}` }, payload: { visibility: 'camp_only' } });
   assert.equal(visibility.statusCode, 200);
+  const realNameWithoutConsent = await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}/visibility`, headers: { authorization: `Bearer ${token}` }, payload: { visibility: 'realname' } });
+  assert.equal(realNameWithoutConsent.statusCode, 409);
+  assert.equal(realNameWithoutConsent.json().error.code, 'realname_consent_required');
+  const realNameWithConsent = await app.inject({ method: 'PATCH', url: `/api/projects/${project.id}/visibility`, headers: { authorization: `Bearer ${token}` }, payload: { visibility: 'realname', consent_confirmed: true } });
+  assert.equal(realNameWithConsent.statusCode, 200);
+  assert.ok(db.prepare('SELECT realname_consent_at FROM projects WHERE id=?').get(project.id).realname_consent_at);
   const collection = await app.inject({ method: 'POST', url: `/api/camps/${camp.id}/collection`, headers: { authorization: `Bearer ${token}` }, payload: { items: [{ project_id: project.id, order: 4, recommended: true }] } });
   assert.equal(collection.statusCode, 200);
   const exported = await app.inject({ method: 'GET', url: `/api/camps/${camp.id}/invites/export`, headers: { authorization: `Bearer ${token}` } });

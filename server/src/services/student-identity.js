@@ -65,8 +65,21 @@ export function updateOwnProfile({ userId, campId, input }) {
   db.exec('BEGIN IMMEDIATE');
   try {
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(userId);
-    const roster = db.prepare('SELECT * FROM camp_roster WHERE user_id=? AND camp_id=? LIMIT 1').get(userId, campId);
-    if (!user || !roster) throw new IdentityError('profile_not_found', '还没有找到你的学员资料，请联系老师。', 404);
+    let roster = db.prepare('SELECT * FROM camp_roster WHERE user_id=? AND camp_id=? LIMIT 1').get(userId, campId);
+    if (!user) throw new IdentityError('profile_not_found', '还没有找到你的学员资料，请联系老师。', 404);
+    if (!roster) {
+      const invite = db.prepare(`SELECT * FROM invites WHERE camp_id=? AND bound_user_id=? AND role='student' LIMIT 1`).get(campId, userId);
+      if (!invite) throw new IdentityError('profile_not_found', '还没有找到你的学员资料，请联系老师。', 404);
+      const realName = normalizeStudentName(input.real_name, 'real_name');
+      const displayName = normalizeStudentName(input.display_name || user.display_name || safeGeneratedNickname(1), 'display_name');
+      const id = 'roster_' + nanoid(12);
+      db.prepare(`INSERT INTO camp_roster
+        (id,camp_id,real_name,display_name,user_id,source,verification_status,created_at,updated_at)
+        VALUES (?,?,?,?,?,'student','self_reported',?,?)`)
+        .run(id, campId, realName, displayName, userId, now(), now());
+      db.prepare('UPDATE invites SET roster_entry_id=? WHERE code=?').run(id, invite.code);
+      roster = db.prepare('SELECT * FROM camp_roster WHERE id=?').get(id);
+    }
     const displayName = input.display_name === undefined ? user.display_name : normalizeStudentName(input.display_name, 'display_name');
     let realName = roster.real_name;
     if (input.real_name !== undefined) {
@@ -90,11 +103,11 @@ export function updateOwnProfile({ userId, campId, input }) {
   }
 }
 
-export function importRosterEntries({ campId, entries, actorUserId, source = 'teacher' }) {
+export function importRosterEntries({ campId, entries, actorUserId, source = 'teacher', manageTransaction = true }) {
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 200) {
     throw new IdentityError('invalid_roster', '名单需要包含 1 到 200 名学员。');
   }
-  db.exec('BEGIN IMMEDIATE');
+  if (manageTransaction) db.exec('BEGIN IMMEDIATE');
   try {
     const camp = db.prepare('SELECT id FROM camps WHERE id=?').get(campId);
     if (!camp) throw new IdentityError('not_found', '找不到这个营地。', 404);
@@ -111,6 +124,10 @@ export function importRosterEntries({ campId, entries, actorUserId, source = 'te
         if (!invite) throw new IdentityError('invite_not_found', `邀请码 ${code} 不属于这个营地。`, 404);
         if (invite.role !== 'student') throw new IdentityError('invalid_invite_role', '老师邀请码不能关联学员名单。');
         if (invite.roster_entry_id) roster = db.prepare('SELECT * FROM camp_roster WHERE id=?').get(invite.roster_entry_id);
+        if (roster && roster.camp_id !== campId) throw new IdentityError('roster_conflict', '邀请码的名单关联不属于这个营地。', 409);
+        if (roster?.user_id && invite.bound_user_id && roster.user_id !== invite.bound_user_id) {
+          throw new IdentityError('roster_conflict', '邀请码与名单已经关联到不同账号，请联系技术支持。', 409);
+        }
       }
       if (!roster) {
         const id = 'roster_' + nanoid(12);
@@ -123,8 +140,11 @@ export function importRosterEntries({ campId, entries, actorUserId, source = 'te
         roster = db.prepare('SELECT * FROM camp_roster WHERE id=?').get(id);
         created++;
       } else {
-        db.prepare(`UPDATE camp_roster SET real_name=?,display_name=?,user_id=COALESCE(user_id,?),updated_at=? WHERE id=?`)
-          .run(realName, displayName, invite?.bound_user_id || null, now(), roster.id);
+        db.prepare(`UPDATE camp_roster SET real_name=?,display_name=?,user_id=COALESCE(user_id,?),
+                    source=CASE WHEN ?='teacher' THEN 'teacher' ELSE source END,
+                    verification_status=CASE WHEN ?='teacher' THEN 'verified' ELSE verification_status END,
+                    updated_at=? WHERE id=?`)
+          .run(realName, displayName, invite?.bound_user_id || null, source, source, now(), roster.id);
       }
       if (invite?.bound_user_id) {
         const user = db.prepare('SELECT display_name FROM users WHERE id=?').get(invite.bound_user_id);
@@ -134,10 +154,12 @@ export function importRosterEntries({ campId, entries, actorUserId, source = 'te
       items.push(rosterView(roster.id));
     }
     if (actorUserId) audit({ campId, actorUserId, action: 'roster_import', targetId: campId, detail: { count: entries.length, created } });
-    db.exec('COMMIT');
+    if (manageTransaction) db.exec('COMMIT');
     return { created, items };
   } catch (error) {
-    try { db.exec('ROLLBACK'); } catch { /* 没有活动事务 */ }
+    if (manageTransaction) {
+      try { db.exec('ROLLBACK'); } catch { /* 没有活动事务 */ }
+    }
     throw error;
   }
 }

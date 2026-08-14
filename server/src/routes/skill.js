@@ -123,7 +123,7 @@ export default async function skillRoutes(app, {
     }
     const result = bindInvite(normalized, { kind: 'skill', deviceName: device_name || '未命名设备', realName: real_name, displayName: display_name });
     if (result.error) {
-      inviteLimiter.recordFailure(req.ip, normalized);
+      if (result.error[0] !== 'profile_required') inviteLimiter.recordFailure(req.ip, normalized);
       return err(reply, ...result.error);
     }
     return result;

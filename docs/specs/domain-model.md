@@ -362,4 +362,16 @@ camps.visibility_default  ──被覆盖──▶  projects.visibility  ──�
 | "已发布" 徽章 | `publish_status` |
 | 推荐位与展示顺序 | `projects.collection_recommended`、`projects.collection_order` |
 
-**结论：模型完整覆盖原型的全部界面元素，没有缺字段，也没有多余的表。**
+## 5. 学员身份与名单（2026-08-14）
+
+`camp_roster` 是营地私有名单，独立于邀请码、账号和项目：
+
+- `real_name` 只供学员本人和本营地老师辨认；`display_name` 是公共昵称。
+- `source=student`、`verification_status=self_reported` 表示学员首次登录自填，等待老师确认。
+- `source=teacher`、`verification_status=verified` 表示老师预分配或已经核对。
+- `invites.roster_entry_id` 可空且唯一，使“名单先、邀请码先、学员先登录”三种顺序都成立。
+- `camp_roster.user_id` 在兑换后关联账号；同名学员合法，姓名永远不是唯一键。
+
+公共展示仍只读取 `users.display_name`。老师若把项目可见性切到 `realname`，必须同时提交明确同意，系统记录到 `projects.realname_consent_at`、`realname_consent_by` 和审计日志。
+
+**结论：模型覆盖作品生命周期和灵活学员身份；名单表只承担营地私有身份，不复制项目或权限状态。**

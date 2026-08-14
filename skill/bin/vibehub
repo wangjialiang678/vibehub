@@ -189,19 +189,27 @@ function countFiles(dir, ignore = IGNORE) {
 
 // ── 命令 ─────────────────────────────────────────────────────────────
 const cmds = {
-  async bind(code) {
+  async bind(code, ...args) {
     if (!code) die('请提供邀请码。', `用法：${CLI_DISPLAY} bind <邀请码>`);
+    let realName, displayName;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--name') realName = args[++i];
+      else if (args[i] === '--nickname') displayName = args[++i];
+      else die(`不认识参数 ${args[i]}。`, `用法：${CLI_DISPLAY} bind <邀请码> --name "真实姓名" --nickname "公开昵称"`);
+    }
     // 先确认旧连接可读，避免服务端已签发 token 后才发现本地无法保存。
     const store = loadStore(false);
     const api_base = process.env.VIBEHUB_API || DEFAULT_API;
     const res = await fetch(api_base + '/api/skill/bind', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code, device_name: `${basename(homedir())} · ${process.env.TERM_PROGRAM || process.env.COMPUTERNAME || 'CLI'}` }),
+      body: JSON.stringify({ code, device_name: `${basename(homedir())} · ${process.env.TERM_PROGRAM || process.env.COMPUTERNAME || 'CLI'}`,
+        ...(realName ? { real_name: realName } : {}), ...(displayName ? { display_name: displayName } : {}) }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) die(data.error?.message || '绑定失败', data.error?.hint);
-    const cred = { token: data.token, api: api_base, camp: data.camp, project: data.project, user: data.user };
+    const cred = { token: data.token, api: api_base, camp: data.camp, project: data.project,
+      user: data.user ? { id: data.user.id, username: data.user.username, display_name: data.user.display_name } : null };
     const key = connectionKey(cred);
     store.version = 2;
     store.connections[key] = cred;
@@ -371,6 +379,7 @@ const cmds = {
 ${c.bold}vibehub${c.x} — 把你的作品交给 VibeHub
 
   ${c.bold}${CLI_DISPLAY} bind <邀请码>${c.x}   用邀请码连上平台
+      --name "真实姓名" --nickname "公开昵称"（首次连接学员码时使用）
   ${c.bold}${CLI_DISPLAY} camps${c.x}            查看已经连接的营地
   ${c.bold}${CLI_DISPLAY} use <营地标识>${c.x}   切换当前营地
   ${c.bold}${CLI_DISPLAY} deploy${c.x}           打包当前目录并提交

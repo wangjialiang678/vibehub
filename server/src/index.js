@@ -146,7 +146,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
     }
     const data = bindInvite(code, { kind: 'web', deviceName: '网页', realName: req.body?.real_name, displayName: req.body?.display_name });
     if (data.error) {
-      inviteLimiter.recordFailure(req.ip, code);
+      if (data.error[0] !== 'profile_required') inviteLimiter.recordFailure(req.ip, code);
       const [errorCode, status, message, hint] = data.error;
       return reply.code(status).send({ error: { code: errorCode, message, hint } });
     }

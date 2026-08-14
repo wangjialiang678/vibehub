@@ -186,6 +186,22 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 | `PATCH` | `/api/projects/:id/visibility` | 覆盖课程默认可见性 |
 | `POST` | `/api/camps/:id/collection` | 集合页排序/推荐位管理 |
 
+### 学员身份与名单
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/session/redeem` | 邀请码网页登录；首次学生码可带 `real_name`、`display_name` |
+| `POST` | `/api/skill/bind` | Skill 绑定；字段与网页登录一致 |
+| `GET` | `/api/me` | 返回本人私有姓名、公共昵称和确认状态 |
+| `PATCH` | `/api/me/profile` | 学员改公共昵称；未确认前可修正真实姓名 |
+| `GET` | `/api/camps/:id/roster` | 老师查看本营地名单、邀请码掩码和作品状态 |
+| `POST` | `/api/camps/:id/roster/import` | 老师补录姓名与已有邀请码，可重复执行 |
+| `PATCH` | `/api/camps/:id/roster/:rosterId` | 老师更正昵称/姓名并确认身份 |
+
+未分配的学生邀请码在不带姓名时返回 `409 profile_required`；预分配姓名不一致返回 `409 profile_mismatch`，且不会创建账号、项目或 token。真实姓名不会出现在公开 API 和邀请码转发文案中。
+
+`PATCH /api/projects/:id/visibility` 设置 `realname` 时还必须提交 `consent_confirmed: true`，否则返回 `409 realname_consent_required`。
+
 ---
 
 ## 4. 公开端（无需鉴权）

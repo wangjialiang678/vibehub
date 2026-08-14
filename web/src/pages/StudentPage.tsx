@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError, api, readableError } from '../lib/api';
 import { AppShell, ModeTabs } from '../components/Shell';
@@ -8,7 +9,7 @@ import { SubmissionCta } from '../components/SubmissionCta';
 import { LoginRequired, PageState, PreviewFrame, StatusPill, copyToClipboard, useQrCode } from '../components/Ui';
 import { diagnosisCompleteness, diagnosisEvidenceLabel, formatDateTime, formatDiagnosisPercentage, formatNumber, getDiagnosisState, getProjectPollInterval, getProjectStatus } from '../lib/presentation';
 import { usePageVisibility } from '../lib/pageVisibility';
-import type { DiagnosisItem, ProjectSnapshot } from '../lib/types';
+import type { DiagnosisItem, MeResponse, ProjectSnapshot } from '../lib/types';
 
 export function StudentPage() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, retry: false });
@@ -22,7 +23,7 @@ export function StudentPage() {
   if (!me.data.project_id) return <NoProject campSlug={me.data.camp.slug} />;
   if (project.isPending) return <PageState title="正在打开你的项目…" />;
   if (project.isError) return <PageState error={project.error} action={<Link className="button button-coral" to="/login">重新登录</Link>} />;
-  return <StudentDashboard snapshot={project.data} userName={me.data.user.display_name} refreshProject={() => project.refetch().then(() => undefined)} />;
+  return <StudentDashboard snapshot={project.data} userName={me.data.user.display_name} identity={me.data} refreshProject={() => project.refetch().then(() => undefined)} />;
 }
 
 function NoProject({ campSlug }: { campSlug: string }) {
@@ -80,7 +81,7 @@ export async function openStudentPreview(url: string, dependencies: StudentPrevi
   }
 }
 
-export function StudentDashboard({ snapshot, userName, refreshProject }: { snapshot: ProjectSnapshot; userName: string; refreshProject?: () => Promise<void> }) {
+export function StudentDashboard({ snapshot, userName, identity, refreshProject }: { snapshot: ProjectSnapshot; userName: string; identity?: MeResponse; refreshProject?: () => Promise<void> }) {
   const { project, camp, pending_version: pending, live_version: live, latest_diagnosis: diagnosis, stats, timeline, last_review: review } = snapshot;
   const previewUrl = pending?.preview_url || project.live_url || null;
   const status = getProjectStatus({ publish_status: project.publish_status, pending_version: pending, last_review: review });
@@ -117,6 +118,7 @@ export function StudentDashboard({ snapshot, userName, refreshProject }: { snaps
           <PreviewFrame url={previewUrl} title={`${project.title} 的预览`} className="student-preview" onStale={refreshProject ? handleStalePreview : undefined} />
         </article>
         <aside className="student-side-stack">
+          {identity && <StudentIdentityCard identity={identity} />}
           <AccessPanel url={project.live_url} qrImage={qrImage} onCopy={copy} />
           <StatsPanel stats={stats} />
         </aside>
@@ -128,6 +130,22 @@ export function StudentDashboard({ snapshot, userName, refreshProject }: { snaps
       <TimelinePanel timeline={timeline} />
     </main>
   </AppShell>;
+}
+
+export function StudentIdentityCard({ identity }: { identity: MeResponse }) {
+  const client = useQueryClient();
+  const [realName, setRealName] = useState(identity.user.real_name || '');
+  const [displayName, setDisplayName] = useState(identity.user.display_name || '');
+  const update = useMutation({
+    mutationFn: api.updateProfile,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['me'] }),
+  });
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    update.mutate({ display_name: displayName.trim(), ...(identity.profile?.verification_status === 'self_reported' ? { real_name: realName.trim() } : {}) });
+  };
+  const verified = identity.profile?.verification_status === 'verified';
+  return <article className="panel student-identity-card"><PanelKicker kicker="学员身份" title="你的名字" icon="☺" /><form onSubmit={submit}><label htmlFor="student-real-name">真实姓名 <small>仅老师可见</small></label><input id="student-real-name" value={realName} maxLength={40} disabled={verified || update.isPending} onChange={(event) => setRealName(event.target.value)} /><label htmlFor="student-display-name">公开昵称 <small>作品集合会显示</small></label><input id="student-display-name" value={displayName} maxLength={40} disabled={update.isPending} onChange={(event) => setDisplayName(event.target.value)} />{verified ? <small className="identity-status">老师已确认真实姓名</small> : <small className="identity-status">学员自填 · 等待老师确认</small>}{update.isError && <p className="form-error" role="alert">{readableError(update.error, '资料暂时无法保存。')}</p>}<button className="button button-outline" disabled={!displayName.trim() || (!verified && !realName.trim()) || update.isPending}>{update.isPending ? '保存中…' : '保存资料'}</button></form></article>;
 }
 
 function PanelKicker({ kicker, title, icon, action }: { kicker: string; title: string; icon?: string; action?: ReactNode }) {

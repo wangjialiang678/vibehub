@@ -1,11 +1,11 @@
-import type { CampCollection, CampOverview, CampProject, CollectionUpdate, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse, SubmissionMeta, SubmissionResponse, VersionsResponse } from './types';
+import type { CampCollection, CampOverview, CampProject, CollectionUpdate, InviteListItem, MeResponse, ProjectSnapshot, ReviewDetail, ReviewsResponse, RosterEntry, SubmissionMeta, SubmissionResponse, VersionsResponse } from './types';
 
 // 开发期始终经 Vite 同源代理访问后端，避免 host-only 会话 cookie 在 localhost 与 127.0.0.1 之间丢失。
 // VITE_API_BASE 在开发期只配置代理目标；部署时才作为浏览器实际请求的 API 域名。
 const API_BASE = (import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE || 'http://127.0.0.1:4300')).replace(/\/$/, '');
 
 export class ApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(public readonly status: number, message: string, public readonly code?: string) {
     super(message);
     this.name = 'ApiError';
   }
@@ -15,10 +15,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: 'include' });
-  const data = await response.json().catch(() => null) as T | { error?: { message?: string } } | null;
+  const data = await response.json().catch(() => null) as T | { error?: { code?: string; message?: string } } | null;
   if (!response.ok) {
-    const message = data && typeof data === 'object' && 'error' in data ? data.error?.message : null;
-    throw new ApiError(response.status, message || '请求没有完成，请稍后再试。');
+    const error = data && typeof data === 'object' && 'error' in data ? data.error : null;
+    throw new ApiError(response.status, error?.message || '请求没有完成，请稍后再试。', error?.code);
   }
   return data as T;
 }
@@ -140,12 +140,16 @@ export const api = {
   projects: (campId: string) => request<{ items: CampProject[] }>(`/api/camps/${encodeURIComponent(campId)}/projects`),
   updateCollection: (campId: string, items: CollectionUpdate[]) => request<{ ok: boolean; updated: number; message: string }>(`/api/camps/${encodeURIComponent(campId)}/collection`, { method: 'POST', body: JSON.stringify({ items }) }),
   invites: (campId: string) => request<{ items: InviteListItem[] }>(`/api/camps/${encodeURIComponent(campId)}/invites`),
-  createInvites: (campId: string, input: { count: number; role: 'student' | 'teacher'; max_devices: number }) => request<{ codes: string[]; message: string }>(`/api/camps/${encodeURIComponent(campId)}/invites`, { method: 'POST', body: JSON.stringify(input) }),
+  createInvites: (campId: string, input: { count: number; role: 'student' | 'teacher'; max_devices: number; names?: string[] }) => request<{ codes: string[]; message: string }>(`/api/camps/${encodeURIComponent(campId)}/invites`, { method: 'POST', body: JSON.stringify(input) }),
+  roster: (campId: string) => request<{ items: RosterEntry[] }>(`/api/camps/${encodeURIComponent(campId)}/roster`),
+  importRoster: (campId: string, entries: Array<{ real_name: string; display_name?: string; code?: string }>) => request<{ created: number; items: RosterEntry[] }>(`/api/camps/${encodeURIComponent(campId)}/roster/import`, { method: 'POST', body: JSON.stringify({ entries }) }),
+  updateRoster: (campId: string, id: string, input: { real_name?: string; display_name?: string; verified?: boolean }) => request<RosterEntry>(`/api/camps/${encodeURIComponent(campId)}/roster/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input) }),
   exportInvites: (campId: string) => requestBlob(`/api/camps/${encodeURIComponent(campId)}/invites/export`),
   resolveInviteCode: async (campId: string, maskedCode: string) => parseInviteCodes(await (await requestBlob(`/api/camps/${encodeURIComponent(campId)}/invites/export`)).text(), maskedCode),
   revokeInvite: (code: string) => request<{ ok: boolean; revoked_tokens: number; message: string }>(`/api/invites/${encodeURIComponent(code)}/revoke`, { method: 'POST' }),
   collection: (slug: string) => request<CampCollection>(`/api/public/camps/${encodeURIComponent(slug)}`),
-  redeem: (code: string) => request<{ role: string; project?: { id: string } | null; user: { display_name: string } }>('/api/session/redeem', { method: 'POST', body: JSON.stringify({ code }) }),
+  redeem: (input: string | { code: string; real_name?: string; display_name?: string }) => request<{ role: string; project?: { id: string } | null; user: { display_name: string } }>('/api/session/redeem', { method: 'POST', body: JSON.stringify(typeof input === 'string' ? { code: input } : input) }),
+  updateProfile: (input: { real_name?: string; display_name?: string }) => request<{ user: MeResponse['user']; profile: NonNullable<MeResponse['profile']> }>('/api/me/profile', { method: 'PATCH', body: JSON.stringify(input) }),
   submitProjectVersion,
 };
 
