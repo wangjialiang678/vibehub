@@ -1,6 +1,6 @@
 import { posix, win32 } from 'node:path';
 
-export const SKILL_VERSION = '1.0.0';
+export const SKILL_VERSION = '1.0.1';
 
 export function assertSafeDistributionPath(filePath) {
   const segments = typeof filePath === 'string' ? filePath.split('/') : [];

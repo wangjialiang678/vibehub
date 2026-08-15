@@ -40,6 +40,8 @@ test('nginx 能解析主域与独立预览虚拟主机配置', { skip: !nginxPat
     ], { stdio: 'ignore' });
     const locations = readFileSync(resolve('..', 'infra', 'nginx', 'vibehub-locations.conf'), 'utf8');
     const preview = readFileSync(resolve('..', 'infra', 'nginx', 'vibehub-preview-server.conf'), 'utf8')
+      // Syntax validation must not require a privileged port on CI runners.
+      .replace('listen 443 ssl http2;', 'listen 8443 ssl http2;')
       .replace('/etc/letsencrypt/live/preview.supermind-ai.cn/fullchain.pem', cert)
       .replace('/etc/letsencrypt/live/preview.supermind-ai.cn/privkey.pem', key);
     const configPath = join(dir, 'nginx.conf');

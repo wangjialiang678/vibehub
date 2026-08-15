@@ -4,6 +4,7 @@ import { db, now } from './db.js';
 import { CONSOLE_ORIGIN } from './config.js';
 
 const hash = (t) => createHash('sha256').update(t).digest('hex');
+const rawToken = (kind) => (kind === 'skill' ? 'vhk_' : 'vhs_') + randomBytes(24).toString('base64url');
 
 // Chromium caps persistent cookies at 400 days. Refreshing this lifetime after
 // every successful cookie-authenticated request keeps active devices signed in
@@ -38,13 +39,24 @@ export function renewWebSession(reply, raw, token) {
  * （老师撤销邀请码 → 该码签发的所有 token 立刻失效）。
  * 库里只存哈希。
  */
-export function issueToken({ kind, userId, campId, projectId, role, inviteCode, deviceName, remembered = true, expiresAt = null }) {
-  const raw = (kind === 'skill' ? 'vhk_' : 'vhs_') + randomBytes(24).toString('base64url');
+export function issueToken({ kind, userId, campId, projectId, role, inviteCode, derivedFromTokenId, deviceName, remembered = true, expiresAt = null }) {
+  const raw = rawToken(kind);
   db.prepare(
-    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,device_name,remembered,created_at,expires_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,derived_from_token_id,device_name,remembered,created_at,expires_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run('t_' + nanoid(12), hash(raw), kind, userId, campId, projectId ?? null, role, inviteCode ?? null,
-    deviceName ?? null, remembered ? 1 : 0, now(), expiresAt);
+    derivedFromTokenId ?? null, deviceName ?? null, remembered ? 1 : 0, now(), expiresAt);
+  return raw;
+}
+
+/** 幂等恢复原地换掉不透明凭证，不新增 token 行，并保持派生树的父 ID 不变。 */
+export function rotateToken(tokenId) {
+  const row = db.prepare('SELECT kind FROM tokens WHERE id=?').get(tokenId);
+  if (!row) return null;
+  const raw = rawToken(row.kind);
+  const rotatedAt = now();
+  db.prepare(`UPDATE tokens SET token_hash=?,created_at=?,last_used_at=?,revoked_at=NULL WHERE id=?`)
+    .run(hash(raw), rotatedAt, rotatedAt, tokenId);
   return raw;
 }
 
@@ -75,13 +87,28 @@ export function revokeInviteAndTokens(code) {
 
 export function countDevices(code) {
   return db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code = ? AND kind='skill'
+                     AND derived_from_token_id IS NULL
                      AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)`).get(code, now())?.n ?? 0;
 }
 
 export function revokeToken(raw) {
   if (!raw) return false;
-  return db.prepare('UPDATE tokens SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL')
-    .run(now(), hash(raw)).changes > 0;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const revoked = db.prepare(`WITH RECURSIVE token_tree(id) AS (
+      SELECT id FROM tokens WHERE token_hash=?
+      UNION
+      SELECT child.id FROM tokens child JOIN token_tree parent ON child.derived_from_token_id=parent.id
+    )
+    UPDATE tokens SET revoked_at=?
+    WHERE revoked_at IS NULL AND id IN (SELECT id FROM token_tree)`)
+      .run(hash(raw), now()).changes;
+    db.exec('COMMIT');
+    return revoked > 0;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* BEGIN 失败时没有可回滚事务 */ }
+    throw error;
+  }
 }
 
 const isMutation = (method) => ['POST', 'PATCH', 'DELETE'].includes(method);

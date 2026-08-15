@@ -19,7 +19,6 @@ import {
   RevealedInviteActions,
   TeacherStudentGuide,
   buildStudentAiGuide,
-  buildStudentBrowserGuide,
   buildStudentInviteMessages,
   copyStudentInviteMessage,
   copyTeacherStudentGuide,
@@ -171,7 +170,7 @@ describe('学员邀请码转发说明', () => {
   const codes = ['STUDENT-ONE', 'STUDENT-TWO'];
   const origin = 'https://hub.example.test';
 
-  it('每个邀请码生成独立文案，并包含地址、双提交方式和独立性提醒', () => {
+  it('每个邀请码生成 AI 优先的一段式文案，并保留网页备用入口', () => {
     const messages = buildStudentInviteMessages(codes, '暑期创造营', origin);
     const firstAiPrompt = buildVibeHubDeployPrompt(origin, codes[0]);
     const secondAiPrompt = buildVibeHubDeployPrompt(origin, codes[1]);
@@ -184,21 +183,22 @@ describe('学员邀请码转发说明', () => {
     expect(messages[1]).not.toContain('STUDENT-ONE');
     expect(messages[0]).toContain('每人一码');
     expect(messages[0]).toContain('不可互换');
-    expect(messages[0]).toContain('提交我的游戏');
+    expect(messages[0]).toContain('立即部署当前游戏');
     expect(messages[0]).toContain('HTML、ZIP 或网页文件夹');
     expect(messages[0]).toContain('AI 助手');
-    expect(messages[0]).toContain(`${origin}/install`);
+    expect(messages[0]).toContain('网页备用');
     expect(messages[0]).toContain(firstAiPrompt);
     expect(messages[1]).toContain(secondAiPrompt);
     expect(firstAiPrompt.match(/STUDENT-ONE/g)).toHaveLength(1);
     expect(secondAiPrompt.match(/STUDENT-TWO/g)).toHaveLength(1);
     expect(messages[0]).toContain('manifest.json');
     expect(messages[0]).toContain('install.mjs');
+    expect(messages[0].match(/STUDENT-ONE/g)).toHaveLength(1);
+    expect(messages[1].match(/STUDENT-TWO/g)).toHaveLength(1);
     expect(messages[0]).not.toMatch(/shell|PowerShell|node --version|\bnpm\b|SkillHub/i);
   });
 
-  it('未生成邀请码前也渲染两套可转发说明，只使用当前营地、公开地址和占位码', () => {
-    const browserGuide = buildStudentBrowserGuide('星际创造营', origin);
+  it('未生成邀请码前只渲染一张可转发说明卡和一次复制动作', () => {
     const aiGuide = buildStudentAiGuide('星际创造营', origin);
     const html = render(createElement(TeacherStudentGuide, {
       campName: '星际创造营',
@@ -206,29 +206,19 @@ describe('学员邀请码转发说明', () => {
       onCopy: vi.fn(),
     }));
 
-    expect(browserGuide).toContain('星际创造营');
-    expect(browserGuide).toContain('CAMP-XXXX');
-    expect(browserGuide).toContain(`${origin}/login`);
-    expect(browserGuide).toContain('网页 HTML、ZIP 或网页文件夹');
-    expect(browserGuide).toBe([
-      '欢迎加入「星际创造营」！',
-      '',
-      '网页登录并提交游戏：',
-      `1. 打开 ${origin}/login`,
-      '2. 输入你自己的邀请码：CAMP-XXXX',
-      '3. 登录后点击“提交我的游戏”。',
-      '4. 上传网页 HTML、ZIP 或网页文件夹。',
-      '每人一码，不可互换或与他人共用。',
-    ].join('\n'));
-    expect(aiGuide).toContain(`${origin}/install`);
+    expect(aiGuide).toContain('星际创造营');
+    expect(aiGuide).toContain(`${origin}/login`);
+    expect(aiGuide).toContain('网页备用');
     expect(aiGuide).toContain(buildVibeHubDeployPrompt(origin, 'CAMP-XXXX'));
     expect(aiGuide.match(/CAMP-XXXX/g)).toHaveLength(1);
     expect(aiGuide).toContain('manifest.json');
     expect(aiGuide).not.toMatch(/shell|PowerShell|node --version|\bnpm\b|SkillHub/i);
-    expect(`${browserGuide}${aiGuide}`).not.toMatch(/深圳|STUDENT-ONE|hub\.supermind-ai\.cn/);
+    expect(aiGuide).not.toMatch(/深圳|STUDENT-ONE|hub\.supermind-ai\.cn/);
     expect(html).toContain('发给学员的使用说明');
-    expect(html).toContain('复制网页登录说明');
-    expect(html).toContain('复制 AI 部署说明');
+    expect(html.match(/<article/g)).toHaveLength(1);
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).toContain('复制完整说明');
+    expect(html).not.toContain('复制网页登录说明');
     expect(html).toContain('CAMP-XXXX');
   });
 
@@ -250,14 +240,14 @@ describe('学员邀请码转发说明', () => {
     expect(student).toContain('aria-label="复制第 1 位学员的说明"');
     expect(student).toContain('aria-label="复制第 2 位学员的说明"');
     expect(student).toContain(`${origin}/login`);
-    expect(student).toContain(`${origin}/install`);
+    expect(student).toContain(`${origin}/downloads/vibehub-skill/install.mjs`);
     expect(student).toContain('manifest.json');
-    expect(student).toContain('部署我的游戏');
+    expect(student).toContain('立即部署当前游戏');
     expect(teacher).not.toContain('复制发给学员的说明');
     expect(teacher).not.toContain(`${origin}/login`);
-    expect(teacher).not.toContain(`${origin}/install`);
+    expect(teacher).not.toContain(`${origin}/downloads/vibehub-skill/install.mjs`);
     expect(teacher).not.toContain('manifest.json');
-    expect(teacher).not.toContain('部署我的游戏');
+    expect(teacher).not.toContain('立即部署当前游戏');
   });
 
   it('只按本次生成时的角色展示说明，且不记录或持久化明码', () => {
@@ -265,7 +255,8 @@ describe('学员邀请码转发说明', () => {
     expect(source).toContain('setRevealedRole(input.role)');
     expect(source).toContain('VITE_PUBLIC_APP_URL');
     expect(source).toContain('publicAppBaseUrl(');
-    expect(source).toContain("import { buildVibeHubDeployPrompt } from '../lib/vibehubDeployPrompt';");
+    expect(source).toContain("from '../lib/vibehubDeployPrompt';");
+    expect(source).toContain('buildVibeHubDeployPrompt(baseUrl, code)');
     expect(source).toContain('role="status"');
     expect(source.indexOf('<TeacherStudentGuide')).toBeGreaterThan(-1);
     expect(source.indexOf('<TeacherStudentGuide')).toBeLessThan(source.indexOf('<section className="panel invite-reveal"'));
@@ -273,14 +264,14 @@ describe('学员邀请码转发说明', () => {
     expect(source).not.toContain('console.');
   });
 
-  it('复制两套模板时使用固定成功或失败提示，不回显邀请码', async () => {
+  it('复制统一模板时使用固定成功或失败提示，不回显邀请码', async () => {
     const setNotice = vi.fn();
-    const guide = buildStudentBrowserGuide('星际创造营', origin);
-    await copyTeacherStudentGuide(guide, 'browser', vi.fn(async () => undefined), setNotice);
-    expect(setNotice).toHaveBeenLastCalledWith('网页登录说明已复制');
+    const guide = buildStudentAiGuide('星际创造营', origin);
+    await copyTeacherStudentGuide(guide, vi.fn(async () => undefined), setNotice);
+    expect(setNotice).toHaveBeenLastCalledWith('学员完整说明已复制');
 
-    await copyTeacherStudentGuide(guide, 'ai', vi.fn(async () => { throw new Error('CAMP-SECRET'); }), setNotice);
-    expect(setNotice).toHaveBeenLastCalledWith('AI 部署说明暂时无法复制。');
+    await copyTeacherStudentGuide(guide, vi.fn(async () => { throw new Error('CAMP-SECRET'); }), setNotice);
+    expect(setNotice).toHaveBeenLastCalledWith('学员完整说明暂时无法复制。');
     expect(setNotice.mock.calls.flat().join('')).not.toContain('CAMP-SECRET');
   });
 

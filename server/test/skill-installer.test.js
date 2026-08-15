@@ -108,6 +108,7 @@ test('一条命令把同一份提示词和脚本安装到 Codex、Claude Code �
     assert.match(result.stdout, /Claude Code/);
     assert.match(result.stdout, /WorkBuddy/);
     assert.match(result.stdout, /邀请码/);
+    assert.match(result.stdout, /不要.*第二段|继续.*(?:创建|关联).*部署/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -289,7 +290,7 @@ test('自托管分发只生成固定白名单并提供可复算的完整性清�
 
     const manifest = JSON.parse(readFileSync(join(output, 'manifest.json'), 'utf8'));
     assert.equal(manifest.schema_version, 1);
-    assert.equal(manifest.skill_version, '1.0.0');
+    assert.equal(manifest.skill_version, '1.0.1');
     assert.deepEqual(manifest.files.map((file) => file.path), expectedFiles);
     for (const entry of manifest.files) {
       assert.equal(entry.path.startsWith('/') || entry.path.split('/').includes('..'), false);
@@ -319,7 +320,7 @@ test('自托管分发共享白名单不可变且拒绝危险路径', async () =>
   const moduleUrl = pathToFileURL(join(skillRoot, 'distribution-files.mjs')).href;
   const { assertSafeDistributionPath, DISTRIBUTION_FILES, SKILL_VERSION } = await import(moduleUrl);
 
-  assert.equal(SKILL_VERSION, '1.0.0');
+  assert.equal(SKILL_VERSION, '1.0.1');
   assert.ok(Object.isFrozen(DISTRIBUTION_FILES));
   assert.throws(() => assertSafeDistributionPath('/absolute/path'), /unsafe distribution path/);
   assert.throws(() => assertSafeDistributionPath('../secret'), /unsafe distribution path/);

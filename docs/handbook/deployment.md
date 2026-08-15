@@ -49,7 +49,22 @@ sudo chown -R vibehub:vibehub /var/lib/vibehub /opt/vibehub-releases
 sudo chmod 755 /var/lib/vibehub
 ```
 
-## 3. 发布服务端与 systemd
+## 3. 每次上线第一步：备份数据库
+
+首次环境准备完成后，每次版本上线都必须从本节开始，备份验证通过前不得同步、切换或重启任何新版本。使用 SQLite 在线备份，文件名同时包含 UTC 时间戳与待发布 commit SHA：
+
+```bash
+release_sha=<待发布的完整 commit SHA>
+backup_stamp="$(date -u +%Y%m%d-%H%M%S)"
+backup_path="/var/lib/vibehub/backup/db-${backup_stamp}-${release_sha}.sqlite"
+sudo install -d -o vibehub -g vibehub -m 0750 /var/lib/vibehub/backup
+sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".backup '${backup_path}'"
+sudo -u vibehub sqlite3 "${backup_path}" 'PRAGMA integrity_check;'
+```
+
+输出必须严格为 `ok` 才能继续。不要用文件复制替代在线备份 WAL 数据库。首次部署尚无数据库时，在 seed 产生数据库后立即执行同样的在线备份，再开始首次真实数据导入。
+
+## 4. 发布服务端与 systemd
 
 每次发布使用一个时间戳 release，`/opt/vibehub` 软链指向当前 release。先在部署端生成 release 路径并同步服务端：
 
@@ -87,20 +102,26 @@ sudo chmod 0640 /etc/vibehub/vibehub.env
 
 后续发布必须保留 `/etc/vibehub/vibehub.env`；随意轮换该值会让所有尚未到期的预览 claim 立即失效。
 
-把仓库的 systemd 单元安装为 `/etc/systemd/system/vibehub.service`，然后加载并启动：
+把仓库的 systemd 单元安装为 `/etc/systemd/system/vibehub.service`。每次切换 `/opt/vibehub` 软链后都必须显式重启服务，并在继续发布 Web/Skill 前通过健康检查和无凭证鉴权探针：
 
 ```bash
 sudo install -m 0644 /tmp/vibehub-systemd/vibehub.service /etc/systemd/system/vibehub.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now vibehub
+sudo systemctl enable vibehub
+sudo systemctl restart vibehub
 sudo systemctl is-active vibehub
+curl -fsS http://127.0.0.1:4300/healthz
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+  -H 'content-type: application/json' \
+  -d '{"title":"发布门禁探针","request_id":"release-gate-0001"}' \
+  http://127.0.0.1:4300/api/skill/projects)" = 401
 ```
 
-该单元固定使用 `WorkingDirectory=/opt/vibehub`，因而始终启动当前 release。
+该单元固定使用 `WorkingDirectory=/opt/vibehub`，因而重启后加载当前 release。`/healthz` 必须返回成功，且无凭证 `POST /api/skill/projects` 必须严格返回 `401`；任一失败都停止发布，不得切换 Web/Skill 静态资源。
 
-## 4. 构建并发布控制台
+## 5. 构建并发布控制台与 Skill
 
-控制台必须把 API 基址和老师转发给学员的公开地址编入产物。前端的 `prebuild` 会把 **VibeHub Deploy**（技术名 `vibehub-deploy`）的固定白名单文件、SHA-256 清单和在线安装器生成到兼容路径 `dist/downloads/vibehub-skill/`；不需要 npm 登录、npm 包发布、SkillHub 凭证或额外的安装命令环境变量。学生页只展示可复制给 AI 的自然语言，终端操作由 AI 根据该公开分发源完成：
+控制台必须把 API 基址和老师转发给学员的公开地址编入产物。前端的 `prebuild` 会把 **VibeHub Deploy**（技术名 `vibehub-deploy`）的固定白名单文件、SHA-256 清单和在线安装器生成到兼容路径 `dist/downloads/vibehub-skill/`；不需要 npm 登录、npm 包发布、SkillHub 凭证或额外的安装命令环境变量。学生页默认 AI 提交，只展示一段覆盖安装、绑定、项目创建/连接与立即部署的完整自然语言；网页上传作为备用 tab：
 
 ```bash
 cd web
@@ -117,8 +138,18 @@ rsync -az --delete ./dist/ <deploy-user>@<server>:/tmp/vibehub-console-${release
 ```bash
 test -f dist/downloads/vibehub-skill/install.mjs
 test -f dist/downloads/vibehub-skill/manifest.json
-node -e "const m=require('./dist/downloads/vibehub-skill/manifest.json'); if (!m.files?.length) process.exit(1)"
+node --input-type=module -e '
+  import { readFileSync } from "node:fs";
+  const root = "./dist/downloads/vibehub-skill/";
+  const manifest = JSON.parse(readFileSync(root + "manifest.json", "utf8"));
+  if (manifest.skill_version !== "1.0.1" || !manifest.files?.length) process.exit(1);
+  const cli = readFileSync(root + "files/bin/vibehub", "utf8");
+  if (!cli.includes("project create") || !cli.includes("project link")) process.exit(1);
+  console.log("VibeHub Deploy 1.0.1 与多作品 CLI 已验证");
+'
 ```
+
+版本必须精确为 `1.0.1`；只检查“存在 manifest”或仍返回 `1.0.0` 都不能算通过。
 
 在服务器上把整套控制台产物写入新的时间戳目录，完成后再原子切换 nginx 使用的 `current` 软链接。`infra/nginx/vibehub-hub.conf` 的 root 固定为 `/var/www/vibehub-console/current`，因此不会尝试用软链接覆盖控制台父目录。`manifest.json` 与它列出的 Skill 文件会随整套控制台一次生效：
 
@@ -134,7 +165,7 @@ sudo mv -Tf /var/www/vibehub-console/current.next /var/www/vibehub-console/curre
 
 发布后保留当前版和至少一个上一版。需要回滚时，对上一版目录重复 `ln -sfn` 与 `mv -Tf` 两步即可；确认线上探针全部通过后再清理更旧的静态 release。不要再向 `/var/www/vibehub-console/` 原地 `rsync --delete`。
 
-## 5. 安装 nginx 配置
+## 6. 安装 nginx 配置
 
 仓库中的 nginx 文件与生产布局一一对应：
 
@@ -171,7 +202,7 @@ sudo systemctl reload nginx
 
 > ⚠️ `location ~` 的路径正则中包含 `{}` 量词时，整个正则必须加双引号。两个 VibeHub nginx 文件中的预览路径均已加引号；去掉会让 nginx 解析失败。预览虚拟主机刻意关闭 access log，并把 error log 设为 `/dev/null crit`，防止 claim query 因 upstream 错误落盘；预览可用性改由 `/healthz`、应用日志和外部探针监控。
 
-## 6. 初始化数据与外部验收
+## 7. 初始化数据与外部验收
 
 首次部署在当前 release 上执行 seed：
 
@@ -186,7 +217,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
   https://supermind-ai.cn/vibehub/<username>/<project>/
 ```
 
-同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。老师登录管理端的邀请码页后，应能看到“发给学员的使用说明”：通用说明分别覆盖 `/login` 网页直传和 `/install` AI 部署；新生成学员邀请码后，每份完整说明只能包含对应学员自己的明码，老师角色邀请码的生成结果不生成绑定该码的学员转发文案。
+同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。老师登录管理端的邀请码页后，应能看到一段“AI 推荐、网页备用”的完整学员说明；新生成学员邀请码后，每份完整说明只能包含对应学员自己的明码，老师角色邀请码的生成结果不生成绑定该码的学员转发文案。
 
 网页登录默认长期记住当前设备。发布后用一个受控的老师邀请码执行下列探针：脚本不会回显邀请码或 cookie 值，只检查 `vh_session` 的安全属性、成功鉴权后的滑动续期，以及退出后的服务端即时吊销。临时目录里含短期登录凭证，脚本最后必须删除；任何一步失败都不要把 headers 或 cookie jar 贴进日志或工单。
 
@@ -237,15 +268,19 @@ curl -fsS https://hub.supermind-ai.cn/downloads/vibehub-skill/manifest.json | \
     let text = "";
     for await (const chunk of process.stdin) text += chunk;
     const manifest = JSON.parse(text);
+    if (manifest.skill_version !== "1.0.1") process.exit(1);
     const root = "https://hub.supermind-ai.cn/downloads/vibehub-skill/files/";
+    let cli = "";
     for (const entry of manifest.files) {
       const response = await fetch(new URL(entry.path, root));
       if (!response.ok) process.exit(1);
       const body = Buffer.from(await response.arrayBuffer());
       const hash = createHash("sha256").update(body).digest("hex");
       if (body.byteLength !== entry.bytes || hash !== entry.sha256) process.exit(1);
+      if (entry.path === "bin/vibehub") cli = body.toString("utf8");
     }
-    console.log(`已验证 ${manifest.files.length} 个 Skill 文件`);
+    if (!cli.includes("project create") || !cli.includes("project link")) process.exit(1);
+    console.log(`已验证 VibeHub Deploy 1.0.1 与 ${manifest.files.length} 个 Skill 文件`);
   '
 ```
 
@@ -261,7 +296,7 @@ curl -sS -I https://<pid16>.preview.supermind-ai.cn/vibehub/_preview/<pid16>/
 
 第二条裸请求预期 404；作者或老师通过控制台/`vibehub open` 完成授权后的浏览器访问才应成功。
 
-## 7. 回滚与备份
+## 8. 回滚
 
 代码回滚只需把 `/opt/vibehub` 指向上一个 release，再重启服务：
 
@@ -274,10 +309,15 @@ sudo systemctl restart vibehub
 sudo systemctl is-active vibehub
 ```
 
-数据库备份保存在 `/var/lib/vibehub/backup/`：
+代码回滚后如果新版本只执行了向后兼容的加列/加索引迁移，旧服务可以忽略新列，通常不恢复数据库。只有新版本已经写入旧服务无法解释的数据，或完整性/业务探针失败且确认是数据状态所致时，才停止服务并从对应上线前备份恢复；恢复前先另存当前故障库用于追查：
 
 ```bash
-sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".backup /var/lib/vibehub/backup/db-$(date +%F).sqlite"
+failed_stamp="$(date -u +%Y%m%d-%H%M%S)"
+sudo systemctl stop vibehub
+sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".backup '/var/lib/vibehub/backup/failed-${failed_stamp}.sqlite'"
+sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite ".restore '/var/lib/vibehub/backup/<上线前备份>.sqlite'"
+sudo -u vibehub sqlite3 /var/lib/vibehub/db.sqlite 'PRAGMA integrity_check;'
+sudo systemctl start vibehub
 ```
 
 ### 名单回填

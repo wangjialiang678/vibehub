@@ -6,6 +6,7 @@ import { comparableStudentName, normalizeStudentName, safeGeneratedNickname } fr
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_ATTEMPTS = 10;
 const MAX_TRACKED_KEYS = 10_000;
+const MAX_ACTIVE_WEB_SESSIONS = 10;
 
 export class InviteRateLimiter {
   constructor({ clock = () => Date.now() } = {}) {
@@ -39,6 +40,22 @@ export class InviteRateLimiter {
 }
 
 export const normalizeInviteCode = (code) => String(code || '').trim().toUpperCase();
+
+function makeRoomForWebSession(inviteCode) {
+  const active = db.prepare(`SELECT id FROM tokens
+    WHERE invite_code=? AND kind='web' AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at>=?)
+    ORDER BY COALESCE(last_used_at,created_at),created_at,id`).all(inviteCode, now());
+  const overflow = active.slice(0, Math.max(0, active.length - MAX_ACTIVE_WEB_SESSIONS + 1));
+  if (!overflow.length) return;
+  // Web token 不作为项目凭证的父节点。直接删除被淘汰的会话行，
+  // 既让已签发的预览 claim 立即失效，也避免有效邀请码被反复兑换时无限堆积历史行。
+  const remove = db.prepare(`DELETE FROM tokens WHERE id=? AND kind='web'
+    AND NOT EXISTS (SELECT 1 FROM tokens child WHERE child.derived_from_token_id=tokens.id)`);
+  for (const token of overflow) {
+    if (remove.run(token.id).changes !== 1) throw new Error('web session eviction failed');
+  }
+}
 
 export function bindInvite(code, { kind, deviceName, remembered = true, realName: rawRealName, displayName: rawDisplayName }) {
   db.exec('BEGIN IMMEDIATE');
@@ -119,6 +136,7 @@ export function bindInvite(code, { kind, deviceName, remembered = true, realName
     }
     db.prepare(`UPDATE invites SET status='bound', bound_user_id=?, bound_project_id=?, bound_at=COALESCE(bound_at,?) WHERE code=?`)
       .run(user.id, project?.id ?? null, now(), invite.code);
+    if (kind === 'web') makeRoomForWebSession(invite.code);
     const token = issueToken({
       kind, userId: user.id, campId: camp.id, projectId: project?.id,
       role: invite.role, inviteCode: invite.code, deviceName, remembered,

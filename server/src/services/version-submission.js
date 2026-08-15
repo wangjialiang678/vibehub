@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, now } from '../lib/db.js';
 import { paths, previewUrl, worksPath } from '../lib/config.js';
@@ -113,7 +113,8 @@ function restoreFailedSubmission({ project, versionId, previewId, pendingReviewI
     try { db.exec('ROLLBACK'); } catch { /* BEGIN 失败时没有事务可回滚 */ }
     throw error;
   }
-  rmSync(previewLink(previewId), { force: true });
+  try { unlinkSync(previewLink(previewId)); }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; }
   rmSync(versionDir(versionId), { recursive: true, force: true });
 }
 

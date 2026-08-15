@@ -35,7 +35,22 @@ test('Skill 明确区分 AI 判断与脚本安全边界', () => {
 test('CLI 的用户提示不依赖未安装到 PATH 的裸 vibehub 命令', () => {
   const content = readFileSync(resolve('../skill/bin/vibehub'), 'utf8');
   assert.match(content, /CLI_DISPLAY/);
-  assert.doesNotMatch(content, /\bvibehub (?:bind|deploy|status|open|camps|use|logs)\b/);
+  assert.doesNotMatch(content, /\bvibehub (?:bind|deploy|status|open|camps|use|project|logs)\b/);
+});
+
+test('Skill 指导 AI 区分新作品和已有作品，绑定目录后在同一次请求中继续部署', () => {
+  for (const relativePath of ['../skill/SKILL.md', '../skill/AGENTS.md']) {
+    const content = readFileSync(resolve(relativePath), 'utf8');
+    assert.match(content, /project create --title/);
+    assert.match(content, /--from <完整连接标识>/);
+    assert.match(content, /project link <完整连接标识>/);
+    assert.match(content, /新作品/);
+    assert.match(content, /已有作品/);
+    assert.match(content, /目录绑定|绑定.*目录/);
+    assert.match(content, /(?:不要|无需).*(?:第二|再次).*(?:指令|要求|确认)|同一次.*部署/);
+    assert.match(content, /status.*open.*logs|status.*logs.*open|status[、/]open[、/]logs/s);
+    assert.match(content, /当前目录.*绑定|目录绑定.*(?:状态|预览|记录)/);
+  }
 });
 
 test('安装器、CLI 与学生入口不依赖 SkillHub 地址或内部令牌', () => {

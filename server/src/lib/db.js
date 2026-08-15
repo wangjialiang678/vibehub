@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS projects (
   visibility TEXT,
   live_version_id TEXT,
   pending_version_id TEXT,
+  creation_request_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (camp_id, slug)
@@ -157,6 +158,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   project_id TEXT,
   role TEXT NOT NULL,
   invite_code TEXT REFERENCES invites(code),
+  derived_from_token_id TEXT,
   device_name TEXT,
   remembered INTEGER NOT NULL DEFAULT 1, -- 1=长期 Cookie；0=仅当前浏览器会话
   created_at TEXT NOT NULL,
@@ -241,5 +243,11 @@ ensureColumn('projects', 'realname_consent_at', 'TEXT');
 ensureColumn('projects', 'realname_consent_by', 'TEXT REFERENCES users(id)');
 ensureColumn('tokens', 'remembered', 'INTEGER NOT NULL DEFAULT 1');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_roster_entry ON invites(roster_entry_id) WHERE roster_entry_id IS NOT NULL');
+ensureColumn('projects', 'creation_request_id', 'TEXT');
+ensureColumn('tokens', 'derived_from_token_id', 'TEXT');
+db.exec('CREATE INDEX IF NOT EXISTS idx_tokens_derived_from ON tokens(derived_from_token_id)');
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_creation_request
+         ON projects(owner_user_id,camp_id,creation_request_id)
+         WHERE creation_request_id IS NOT NULL`);
 
 export const now = () => new Date().toISOString();

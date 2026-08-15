@@ -25,7 +25,7 @@ export function InstallPageView({ origin }: { origin: string }) {
     <section className="install-hero">
       <p className="eyebrow">给你的 AI 装上部署能力</p>
       <h1>做好游戏，<br />一句话交给老师。</h1>
-      <p>复制下面这段话给你常用的 AI，它会完成安装并在你授权后提交作品。营地和作品由邀请码决定。</p>
+      <p>复制下面这段话给你常用的 AI，它会一次完成安装、作品确认和提交。营地和作品由邀请码及你的选择决定。</p>
       <div className="agent-row"><span>Codex</span><span>Claude Code</span><span>WorkBuddy</span></div>
     </section>
     <section className="install-card panel">
@@ -39,7 +39,7 @@ export function InstallPageView({ origin }: { origin: string }) {
     <section className="install-steps" aria-label="使用步骤">
       <article><span>01</span><div><h2>复制这段话</h2><p>点击上面的按钮，完整复制给 AI 的安装与部署说明。</p></div></article>
       <article><span>02</span><div><h2>粘贴给 AI</h2><p>打开你常用的 AI 工具，把这段话粘贴进去，安装过程由它完成。</p></div></article>
-      <article><span>03</span><div><h2>提供邀请码并部署</h2><p>按 AI 提示提供自己的邀请码。游戏做好后，说：“部署我的游戏。”</p></div></article>
+      <article><span>03</span><div><h2>一次完成安装与部署</h2><p>按 AI 提示补充邀请码或选择作品；目标确认后，它会直接部署，不用再发第二条指令。</p></div></article>
     </section>
     <footer className="install-footer"><span>Skill 负责教 AI 怎么做</span><span>脚本负责安全地绑定、打包和上传</span></footer>
   </main>;
