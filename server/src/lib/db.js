@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS tokens (
   role TEXT NOT NULL,
   invite_code TEXT REFERENCES invites(code),
   device_name TEXT,
+  remembered INTEGER NOT NULL DEFAULT 1, -- 1=长期 Cookie；0=仅当前浏览器会话
   created_at TEXT NOT NULL,
   last_used_at TEXT,
   expires_at TEXT,
@@ -238,6 +239,7 @@ ensureColumn('projects', 'collection_recommended', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('invites', 'roster_entry_id', 'TEXT REFERENCES camp_roster(id)');
 ensureColumn('projects', 'realname_consent_at', 'TEXT');
 ensureColumn('projects', 'realname_consent_by', 'TEXT REFERENCES users(id)');
+ensureColumn('tokens', 'remembered', 'INTEGER NOT NULL DEFAULT 1');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_roster_entry ON invites(roster_entry_id) WHERE roster_entry_id IS NOT NULL');
 
 export const now = () => new Date().toISOString();

@@ -140,17 +140,18 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   // ── 学员端网页接口 ──────────────────────────────────────────────
   app.post('/api/session/redeem', async (req, reply) => {
     const code = normalizeInviteCode(req.body?.code);
+    const remembered = req.body?.remember_me !== false;
     if (!code) return reply.code(400).send({ error: { code: 'missing_code', message: '请提供邀请码。' } });
     if (inviteLimiter.isBlocked(req.ip, code)) {
       return reply.code(429).send({ error: { code: 'invite_rate_limited', message: '尝试次数太多，请 10 分钟后再试。' } });
     }
-    const data = bindInvite(code, { kind: 'web', deviceName: '网页', realName: req.body?.real_name, displayName: req.body?.display_name });
+    const data = bindInvite(code, { kind: 'web', deviceName: '网页', remembered, realName: req.body?.real_name, displayName: req.body?.display_name });
     if (data.error) {
       if (data.error[0] !== 'profile_required') inviteLimiter.recordFailure(req.ip, code);
       const [errorCode, status, message, hint] = data.error;
       return reply.code(status).send({ error: { code: errorCode, message, hint } });
     }
-    reply.setCookie('vh_session', data.token, webSessionCookieOptions());
+    reply.setCookie('vh_session', data.token, webSessionCookieOptions({ remembered }));
     return { user: data.user, camp: data.camp, project: data.project, role: data.role };
   });
 

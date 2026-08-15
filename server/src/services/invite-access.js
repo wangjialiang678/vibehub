@@ -40,7 +40,7 @@ export class InviteRateLimiter {
 
 export const normalizeInviteCode = (code) => String(code || '').trim().toUpperCase();
 
-export function bindInvite(code, { kind, deviceName, realName: rawRealName, displayName: rawDisplayName }) {
+export function bindInvite(code, { kind, deviceName, remembered = true, realName: rawRealName, displayName: rawDisplayName }) {
   db.exec('BEGIN IMMEDIATE');
   try {
     // 所有授权判断必须在同一个写事务内重读；不能用事务前快照与撤销/并发兑换竞争。
@@ -121,7 +121,7 @@ export function bindInvite(code, { kind, deviceName, realName: rawRealName, disp
       .run(user.id, project?.id ?? null, now(), invite.code);
     const token = issueToken({
       kind, userId: user.id, campId: camp.id, projectId: project?.id,
-      role: invite.role, inviteCode: invite.code, deviceName,
+      role: invite.role, inviteCode: invite.code, deviceName, remembered,
     });
     db.exec('COMMIT');
     return {

@@ -81,8 +81,40 @@ test('网页登录签发长期安全 Cookie，服务端 token 没有固定到期
   assert.equal(String(cookie.sameSite).toLowerCase(), 'lax');
   assert.equal(cookie.path, '/');
   assert.equal(cookie.domain, undefined);
-  const stored = db.prepare(`SELECT expires_at FROM tokens WHERE invite_code=? AND kind='web'`).get('PERSISTENT-LOGIN');
+  const stored = db.prepare(`SELECT expires_at,remembered FROM tokens WHERE invite_code=? AND kind='web'`).get('PERSISTENT-LOGIN');
   assert.equal(stored.expires_at, null);
+  assert.equal(stored.remembered, 1);
+});
+
+test('取消记住我后只签发浏览器会话 Cookie，后续鉴权不会意外升级为长期 Cookie', async () => {
+  createTeacher({ inviteCode: 'SESSION-ONLY-LOGIN' });
+  const login = await app.inject({
+    method: 'POST', url: '/api/session/redeem',
+    payload: { code: 'SESSION-ONLY-LOGIN', remember_me: false },
+  });
+
+  assert.equal(login.statusCode, 200);
+  const cookie = sessionCookie(login);
+  assert.ok(cookie?.value);
+  assert.equal(cookie.maxAge, undefined);
+  assert.equal(cookie.expires, undefined);
+  const stored = db.prepare(`SELECT expires_at,remembered FROM tokens WHERE invite_code=? AND kind='web'`)
+    .get('SESSION-ONLY-LOGIN');
+  assert.equal(stored.expires_at, null);
+  assert.equal(stored.remembered, 0);
+
+  const me = await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `vh_session=${cookie.value}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(sessionCookie(me)?.maxAge, undefined);
+
+  db.prepare(`UPDATE camps SET visibility_default='camp_only' WHERE id=(SELECT camp_id FROM invites WHERE code=?)`)
+    .run('SESSION-ONLY-LOGIN');
+  const collection = await app.inject({
+    method: 'GET', url: `/api/public/camps/persistent-camp-${sequence}`,
+    headers: { cookie: `vh_session=${cookie.value}` },
+  });
+  assert.equal(collection.statusCode, 200);
+  assert.equal(sessionCookie(collection)?.maxAge, undefined);
 });
 
 test('成功的 Cookie 鉴权自动续期，Bearer 鉴权不写 Cookie', async () => {

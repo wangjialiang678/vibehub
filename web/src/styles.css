@@ -538,6 +538,11 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .invite-form input { width: 100%; min-height: 52px; padding: 0 15px; border: 1px solid var(--line-strong); border-radius: 9px; outline: 0; color: var(--ink); background: var(--surface); font-size: 15px; letter-spacing: .08em; }
 .invite-form input:focus { border-color: var(--coral); box-shadow: 0 0 0 3px var(--coral-soft); }
 .session-note { margin: 12px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.65; }
+.invite-form .remember-option { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; cursor: pointer; }
+.invite-form .remember-option input { width: 18px; min-height: 18px; margin: 0; padding: 0; accent-color: var(--coral); }
+.remember-option span { display: flex; align-items: baseline; gap: 8px; }
+.remember-option strong { font-size: 13px; }
+.remember-option small { color: var(--ink-soft); font-size: 12px; font-weight: 400; }
 .invite-form .button { margin-top: 16px; min-height: 50px; }
 .form-error { margin: 9px 0 0; color: var(--coral-deep); font-size: 12px; line-height: 1.5; }
 .login-help { margin-top: 19px; color: var(--ink-soft); font-size: 12px; }

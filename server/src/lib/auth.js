@@ -10,14 +10,15 @@ const hash = (t) => createHash('sha256').update(t).digest('hex');
 // until explicit logout, browser-data removal, or server-side revocation.
 export const WEB_SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
-export function webSessionCookieOptions() {
-  return {
+export function webSessionCookieOptions({ remembered = true } = {}) {
+  const options = {
     path: '/',
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    maxAge: WEB_SESSION_MAX_AGE_SECONDS,
   };
+  if (remembered) options.maxAge = WEB_SESSION_MAX_AGE_SECONDS;
+  return options;
 }
 
 export function renewWebSession(reply, raw, token) {
@@ -28,7 +29,7 @@ export function renewWebSession(reply, raw, token) {
     db.prepare(`UPDATE tokens SET expires_at=NULL WHERE id=? AND kind='web' AND revoked_at IS NULL`)
       .run(token.id);
   }
-  reply.setCookie('vh_session', raw, webSessionCookieOptions());
+  reply.setCookie('vh_session', raw, webSessionCookieOptions({ remembered: token.remembered !== 0 }));
   return true;
 }
 
@@ -37,12 +38,13 @@ export function renewWebSession(reply, raw, token) {
  * （老师撤销邀请码 → 该码签发的所有 token 立刻失效）。
  * 库里只存哈希。
  */
-export function issueToken({ kind, userId, campId, projectId, role, inviteCode, deviceName, expiresAt = null }) {
+export function issueToken({ kind, userId, campId, projectId, role, inviteCode, deviceName, remembered = true, expiresAt = null }) {
   const raw = (kind === 'skill' ? 'vhk_' : 'vhs_') + randomBytes(24).toString('base64url');
   db.prepare(
-    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,device_name,created_at,expires_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?)`
-  ).run('t_' + nanoid(12), hash(raw), kind, userId, campId, projectId ?? null, role, inviteCode ?? null, deviceName ?? null, now(), expiresAt);
+    `INSERT INTO tokens (id,token_hash,kind,user_id,camp_id,project_id,role,invite_code,device_name,remembered,created_at,expires_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+  ).run('t_' + nanoid(12), hash(raw), kind, userId, campId, projectId ?? null, role, inviteCode ?? null,
+    deviceName ?? null, remembered ? 1 : 0, now(), expiresAt);
   return raw;
 }
 

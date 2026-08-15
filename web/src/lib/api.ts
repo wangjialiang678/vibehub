@@ -148,7 +148,7 @@ export const api = {
   resolveInviteCode: async (campId: string, maskedCode: string) => parseInviteCodes(await (await requestBlob(`/api/camps/${encodeURIComponent(campId)}/invites/export`)).text(), maskedCode),
   revokeInvite: (code: string) => request<{ ok: boolean; revoked_tokens: number; message: string }>(`/api/invites/${encodeURIComponent(code)}/revoke`, { method: 'POST' }),
   collection: (slug: string) => request<CampCollection>(`/api/public/camps/${encodeURIComponent(slug)}`),
-  redeem: (input: string | { code: string; real_name?: string; display_name?: string }) => request<{ role: string; project?: { id: string } | null; user: { display_name: string } }>('/api/session/redeem', { method: 'POST', body: JSON.stringify(typeof input === 'string' ? { code: input } : input) }),
+  redeem: (input: string | { code: string; remember_me?: boolean; real_name?: string; display_name?: string }) => request<{ role: string; project?: { id: string } | null; user: { display_name: string } }>('/api/session/redeem', { method: 'POST', body: JSON.stringify(typeof input === 'string' ? { code: input } : input) }),
   updateProfile: (input: { real_name?: string; display_name?: string }) => request<{ user: MeResponse['user']; profile: NonNullable<MeResponse['profile']> }>('/api/me/profile', { method: 'PATCH', body: JSON.stringify(input) }),
   submitProjectVersion,
 };

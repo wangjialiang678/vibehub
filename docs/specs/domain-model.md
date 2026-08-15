@@ -95,6 +95,8 @@ CREATE INDEX idx_invites_camp ON invites(camp_id, status);
 
 **授权原则（抄自超脑上传平台 ADR-002 的教训）**：邀请码兑换出的凭证里必须**内嵌 camp_id + project_id 作用域**，服务端一切鉴权只认凭证里的 scope，**绝不接受客户端自报的 camp/project 参数**。身份表单只用于台账和默认筛选。
 
+网页 token 的 `remembered` 字段记录登录页选择：`1` 为滑动续期的长期 Cookie，`0` 为不含 `Max-Age`/`Expires` 的当前浏览器会话 Cookie。该字段不改变权限和服务端吊销规则；已有 token 迁移时默认设为 `1`。
+
 ### 1.4 projects — 项目（作品）
 
 ```sql
