@@ -1079,8 +1079,10 @@ test('status、open、logs 按 cwd binding 使用精确凭证，多连接无 bin
       'camp-a:p2': { token: 'token-two', api, camp: { slug: 'camp-a' }, project: { id: 'p2' }, local_paths: [realpathSync(project)] },
     },
   }));
-  writeFileSync(join(bin, 'open'), '#!/bin/sh\nexit 0\n');
-  chmodSync(join(bin, 'open'), 0o755);
+  for (const browserCommand of ['open', 'xdg-open']) {
+    writeFileSync(join(bin, browserCommand), '#!/bin/sh\nexit 0\n');
+    chmodSync(join(bin, browserCommand), 0o755);
+  }
   try {
     for (const command of ['status', 'open', 'logs']) {
       const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), command], {
