@@ -21,7 +21,7 @@ audience: tech
 
 | 主体 | 凭证 | 载体 |
 |---|---|---|
-| 网页用户（学员/老师） | 会话 cookie（**host-only、SameSite=Lax、HttpOnly、Secure**） | 浏览器 |
+| 网页用户（学员/老师） | 可吊销、自动续期的长期会话 cookie（**host-only、SameSite=Lax、HttpOnly、Secure**） | 浏览器 |
 | AI 工具（skill） | `Authorization: Bearer <token>` | `~/.vibehub/credentials.json` |
 | 未审核预览 | 10 分钟 HMAC claim（绑定 preview、version、project、用户、课程与签发 token） | grant 返回的单次引导 URL → 该 preview 独立 origin 的 host-only HttpOnly cookie |
 | 学员作品运行时 | 正式作品由 origin + 路径、预览由独立 preview origin + path 映射 project；作品不持有密钥 | 浏览器 `Referer` 提供公开路由线索，服务端负责校验 |
@@ -65,7 +65,7 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 ```
 错误：`invite_not_found` · `invite_revoked` · `invite_expired` · `invite_device_limit`（已绑满 `max_devices` 台 AI 工具）· `invite_rate_limited`
 
-`POST /api/session/redeem` 使用同一绑定逻辑，但签发 12 小时的网页会话，退出时即时吊销；网页会话不计入 `max_devices`。
+`POST /api/session/redeem` 使用同一绑定逻辑，但为网页签发没有固定服务端到期时间的可吊销会话；网页会话不计入 `max_devices`。浏览器 cookie 使用浏览器兼容的 400 天 `Max-Age`，每次成功的 cookie 鉴权都会以相同安全属性滑动续期，因此持续使用的设备没有固定 400 天上限。仍有效的旧版 12 小时会话会在下一次成功鉴权时无感升级。主动退出、邀请码撤销或管理员吊销会即时使服务端 token 失效；清除网站数据、无痕模式结束或浏览器在长期未使用后清除 cookie 时也需要重新输入邀请码。Skill Bearer token 的行为不受此规则影响。
 
 ### `GET /api/skill/project`
 返回当前项目全貌，供 `vibehub status` 输出。

@@ -188,6 +188,44 @@ curl -sS -o /dev/null -w '%{http_code}\n' \
 
 同时打开 `https://hub.supermind-ai.cn/` 确认控制台 SPA 和 API 入口可用。老师登录管理端的邀请码页后，应能看到“发给学员的使用说明”：通用说明分别覆盖 `/login` 网页直传和 `/install` AI 部署；新生成学员邀请码后，每份完整说明只能包含对应学员自己的明码，老师角色邀请码的生成结果不生成绑定该码的学员转发文案。
 
+网页登录默认长期记住当前设备。发布后用一个受控的老师邀请码执行下列探针：脚本不会回显邀请码或 cookie 值，只检查 `vh_session` 的安全属性、成功鉴权后的滑动续期，以及退出后的服务端即时吊销。临时目录里含短期登录凭证，脚本最后必须删除；任何一步失败都不要把 headers 或 cookie jar 贴进日志或工单。
+
+```bash
+set -e
+probe_dir=$(mktemp -d)
+cleanup_probe() {
+  find "$probe_dir" -type f -delete
+  rmdir "$probe_dir"
+}
+trap cleanup_probe EXIT
+read -r -s -p '老师邀请码：' VIBEHUB_TEACHER_CODE
+printf '\n'
+
+VIBEHUB_TEACHER_CODE="$VIBEHUB_TEACHER_CODE" node -e \
+  'process.stdout.write(JSON.stringify({code: process.env.VIBEHUB_TEACHER_CODE}))' | \
+  curl -fsS -D "$probe_dir/login.headers" -c "$probe_dir/cookies" \
+    -H 'Content-Type: application/json' --data-binary @- \
+    https://hub.supermind-ai.cn/api/session/redeem >/dev/null
+unset VIBEHUB_TEACHER_CODE
+
+cookie_line=$(tr -d '\r' < "$probe_dir/login.headers" | rg -i '^set-cookie: vh_session=')
+for attribute in 'httponly' 'secure' 'samesite=lax' 'path=/' ; do
+  printf '%s' "$cookie_line" | rg -qi "$attribute"
+done
+printf '%s' "$cookie_line" | rg -qi 'max-age=[1-9][0-9]{7,}'
+
+cp "$probe_dir/cookies" "$probe_dir/stale-cookies"
+curl -fsS -D "$probe_dir/renew.headers" -b "$probe_dir/cookies" -c "$probe_dir/cookies" \
+  https://hub.supermind-ai.cn/api/me >/dev/null
+tr -d '\r' < "$probe_dir/renew.headers" | rg -qi '^set-cookie: vh_session=.*max-age=[1-9][0-9]{7,}'
+
+curl -fsS -b "$probe_dir/cookies" -X POST \
+  -H 'Origin: https://hub.supermind-ai.cn' \
+  https://hub.supermind-ai.cn/api/session/logout >/dev/null
+test "$(curl -sS -o /dev/null -w '%{http_code}' -b "$probe_dir/stale-cookies" \
+  https://hub.supermind-ai.cn/api/me)" = 401
+```
+
 控制台发布后必须检查 VibeHub Deploy 自托管链路。`/install`、安装器和清单都应返回 200；`/install` 应显示“复制这段话给 AI”，且不得显示 SkillHub、shell 或 PowerShell 安装命令。清单中的每个文件都应可下载，且下载内容的字节数和 SHA-256 与清单一致：
 
 ```bash
