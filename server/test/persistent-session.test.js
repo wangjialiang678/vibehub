@@ -129,6 +129,23 @@ test('仍有效的旧 12 小时会话无感升级，过期或吊销凭证不能�
   assert.equal(sessionCookie(revoked), undefined);
 });
 
+test('仅浏览营地内部作品集合也会续期并升级旧网页会话', async () => {
+  const teacher = createTeacher();
+  db.prepare(`UPDATE camps SET visibility_default='camp_only' WHERE id=?`).run(teacher.campId);
+  const legacyToken = issueToken({
+    kind: 'web', userId: teacher.userId, campId: teacher.campId, role: 'teacher',
+    expiresAt: new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString(),
+  });
+
+  const collection = await app.inject({
+    method: 'GET', url: `/api/public/camps/persistent-camp-${sequence}`,
+    headers: { cookie: `vh_session=${legacyToken}` },
+  });
+  assert.equal(collection.statusCode, 200);
+  assert.equal(sessionCookie(collection)?.maxAge, 400 * 24 * 60 * 60);
+  assert.equal(db.prepare(`SELECT expires_at FROM tokens WHERE user_id=? ORDER BY created_at DESC LIMIT 1`).get(teacher.userId).expires_at, null);
+});
+
 test('退出登录与邀请码撤销会立即终止长期会话', async () => {
   const teacher = createTeacher({ inviteCode: 'PERSISTENT-REVOCABLE' });
   const firstLogin = await app.inject({ method: 'POST', url: '/api/session/redeem', payload: { code: 'PERSISTENT-REVOCABLE' } });

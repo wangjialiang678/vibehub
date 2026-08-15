@@ -1,11 +1,14 @@
 import { db } from '../lib/db.js';
 import { worksUrl } from '../lib/config.js';
-import { resolveToken } from '../lib/auth.js';
+import { renewWebSession, resolveToken } from '../lib/auth.js';
 
-function hasCampSession(req, campId) {
+function hasCampSession(req, reply, campId) {
   const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  const token = resolveToken(bearer || req.cookies?.vh_session);
-  return token?.camp_id === campId;
+  const cookie = req.cookies?.vh_session;
+  const token = resolveToken(bearer || cookie);
+  if (token?.camp_id !== campId) return false;
+  if (!bearer && cookie) renewWebSession(reply, cookie, token);
+  return true;
 }
 
 /**
@@ -16,7 +19,7 @@ export default async function publicRoutes(app) {
   app.get('/api/public/camps/:slug', async (req, reply) => {
     const camp = db.prepare('SELECT * FROM camps WHERE slug=?').get(req.params.slug);
     // camp_only 必须有课程内会话；公开接口不接受会话时一律 404，避免泄露集合存在。
-    if (!camp || !camp.collection_published || (camp.visibility_default === 'camp_only' && !hasCampSession(req, camp.id))) {
+    if (!camp || !camp.collection_published || (camp.visibility_default === 'camp_only' && !hasCampSession(req, reply, camp.id))) {
       return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个作品集合。' } });
     }
 
@@ -78,7 +81,7 @@ export default async function publicRoutes(app) {
         AND p.live_version_id IS NOT NULL
       ORDER BY p.updated_at DESC LIMIT 1`).get(req.params.slug);
     const visibility = row?.visibility || row?.visibility_default;
-    if (!row || ((visibility === 'camp_only' || row.visibility_default === 'camp_only') && !hasCampSession(req, row.camp_id))) {
+    if (!row || ((visibility === 'camp_only' || row.visibility_default === 'camp_only') && !hasCampSession(req, reply, row.camp_id))) {
       return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个作品。' } });
     }
     const views = db.prepare('SELECT COALESCE(SUM(views),0) AS n FROM page_views WHERE project_id=?').get(row.id);

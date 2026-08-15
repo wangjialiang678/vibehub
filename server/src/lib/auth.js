@@ -20,6 +20,18 @@ export function webSessionCookieOptions() {
   };
 }
 
+export function renewWebSession(reply, raw, token) {
+  if (!raw || token?.kind !== 'web') return false;
+  // Upgrade still-valid legacy 12-hour sessions in place. Expired or revoked
+  // tokens are rejected by resolveToken before callers can renew them.
+  if (token.expires_at) {
+    db.prepare(`UPDATE tokens SET expires_at=NULL WHERE id=? AND kind='web' AND revoked_at IS NULL`)
+      .run(token.id);
+  }
+  reply.setCookie('vh_session', raw, webSessionCookieOptions());
+  return true;
+}
+
 /**
  * 凭证是不透明随机串，不是 JWT——必须支持即时吊销
  * （老师撤销邀请码 → 该码签发的所有 token 立刻失效）。
@@ -110,13 +122,7 @@ export function authRequired(roles = null) {
       return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个内容。' } });
     }
     if (credentialSource === 'cookie' && tok.kind === 'web') {
-      // Upgrade still-valid legacy 12-hour sessions in place. Expired or
-      // revoked tokens returned above and can never reach this renewal path.
-      if (tok.expires_at) {
-        db.prepare(`UPDATE tokens SET expires_at=NULL WHERE id=? AND kind='web' AND revoked_at IS NULL`)
-          .run(tok.id);
-      }
-      reply.setCookie('vh_session', raw, webSessionCookieOptions());
+      renewWebSession(reply, raw, tok);
     }
     req.auth = tok;
     req.authSource = credentialSource;
