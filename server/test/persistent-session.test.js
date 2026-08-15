@@ -68,7 +68,8 @@ test('网页登录签发长期安全 Cookie，服务端 token 没有固定到期
   try {
     login = await app.inject({ method: 'POST', url: '/api/session/redeem', payload: { code: 'PERSISTENT-LOGIN' } });
   } finally {
-    process.env.NODE_ENV = previousNodeEnv;
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
   }
 
   assert.equal(login.statusCode, 200);
@@ -79,6 +80,7 @@ test('网页登录签发长期安全 Cookie，服务端 token 没有固定到期
   assert.equal(cookie.secure, true);
   assert.equal(String(cookie.sameSite).toLowerCase(), 'lax');
   assert.equal(cookie.path, '/');
+  assert.equal(cookie.domain, undefined);
   const stored = db.prepare(`SELECT expires_at FROM tokens WHERE invite_code=? AND kind='web'`).get('PERSISTENT-LOGIN');
   assert.equal(stored.expires_at, null);
 });
@@ -94,6 +96,11 @@ test('成功的 Cookie 鉴权自动续期，Bearer 鉴权不写 Cookie', async (
   const bearerRequest = await app.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${bearerToken}` } });
   assert.equal(bearerRequest.statusCode, 200);
   assert.equal(sessionCookie(bearerRequest), undefined);
+
+  const skillToken = issueToken({ kind: 'skill', userId: teacher.userId, campId: teacher.campId, role: 'teacher' });
+  const skillRequest = await app.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${skillToken}` } });
+  assert.equal(skillRequest.statusCode, 200);
+  assert.equal(sessionCookie(skillRequest), undefined);
 });
 
 test('仍有效的旧 12 小时会话无感升级，过期或吊销凭证不能被续期恢复', async () => {
