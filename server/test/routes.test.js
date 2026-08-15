@@ -618,12 +618,34 @@ test('黄金路径 bind → deploy → approve → 正式地址 200 仍可跑通
   assert.match(published.body, /具备足够可见内容/);
 });
 
+test('老师邀请码列表的设备数不把派生项目 token 当新设备', async () => {
+  const camp = createCamp();
+  const { token: teacher } = teacherToken(camp.id);
+  const student = await bindStudent(camp.id);
+  const created = await app.inject({
+    method: 'POST', url: '/api/skill/projects',
+    headers: { authorization: `Bearer ${student.token}` },
+    payload: { title: '第二个作品', request_id: 'pc_routes-device-count-0001' },
+  });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code=? AND kind='skill' AND revoked_at IS NULL`).get(student.code).n, 2);
+
+  const listed = await app.inject({
+    method: 'GET', url: `/api/camps/${camp.id}/invites`, headers: { authorization: `Bearer ${teacher}` },
+  });
+  assert.equal(listed.statusCode, 200, listed.body);
+  assert.equal(listed.json().items.find((item) => item.code_masked.endsWith(student.code.slice(-4))).devices, 1);
+});
+
 test('邀请码撤销后，该码签发的 token 立即返回 401', async () => {
   const camp = createCamp();
   const { token } = teacherToken(camp.id);
   const student = await bindStudent(camp.id);
   const revoked = await app.inject({ method: 'POST', url: `/api/invites/${student.code}/revoke`, headers: { authorization: `Bearer ${token}` } });
   assert.equal(revoked.statusCode, 200);
+  assert.equal(revoked.json().revoked_devices, 1);
+  assert.equal(revoked.json().revoked_tokens, 1);
+  assert.match(revoked.json().message, /1 台设备/);
   const result = await app.inject({ method: 'GET', url: '/api/skill/project', headers: { authorization: `Bearer ${student.token}` } });
   assert.equal(result.statusCode, 401);
 });

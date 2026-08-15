@@ -140,7 +140,7 @@ try {
     install(destination, backupRoot);
     console.log(`✓ 自定义 Agent：${destination}`);
   }
-  console.log('\n安装完成。回到 AI 对话，告诉它：“使用邀请码加入 VibeHub 营地。”');
+  console.log('\n安装完成。继续当前请求：绑定邀请码，判断创建新作品或关联已有作品，然后立即部署；不要让学生再复制第二段指令。');
 } catch (error) {
   console.error(`✗ ${error instanceof Error ? error.message : '安装失败。请检查目录权限后重试。'}`);
   process.exitCode = 1;

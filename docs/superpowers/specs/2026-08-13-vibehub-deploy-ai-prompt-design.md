@@ -5,6 +5,8 @@ status: approved
 audience: product, tech
 ---
 
+> 2026-08-15 更新：本文的自托管分发与安全边界继续有效；“绑定后等待第二句部署指令”和老师端两段复制流程已被 `2026-08-15-ai-multi-project-submission-design.md` 的一步式 AI 流程取代。
+
 # 目标
 
 学生不再看到或复制终端脚本。VibeHub 官网 `/install` 只提供一段可直接粘贴给 WorkBuddy、Codex、Claude Code 或其他兼容 Agent 的自然语言；AI 负责识别电脑与 Agent、从 VibeHub 官方公开分发源安装 Skill、询问邀请码并在学生授权后部署网页游戏。
@@ -54,4 +56,3 @@ Skill 的展示名称统一为 **VibeHub Deploy**，技术标识为 `vibehub-dep
 5. Skill 快速校验、前端测试、TypeScript、生产构建与完整服务端测试通过。
 6. 生产 `/install` 与分发文件 200；干净临时 HOME 完成官网安装到 `vibehub-deploy`。
 7. SkillHub 索引出现新条目 `vibehub-deploy`/`VibeHub Deploy`；旧 `vibehub` 仍存在；官网页面不出现 SkillHub。
-

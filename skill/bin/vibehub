@@ -3,15 +3,19 @@
  * vibehub —— 把你的作品交给 VibeHub。
  * 零依赖，Node ≥ 20。学员的 AI 工具调用它。
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, chmodSync, rmSync } from 'node:fs';
+import { linkSync, readFileSync, writeFileSync, mkdirSync, existsSync, statSync, readdirSync, chmodSync, rmSync, renameSync, realpathSync, lstatSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve, relative, basename } from 'node:path';
-import { createHash } from 'node:crypto';
+import { join, resolve, relative, basename, dirname, isAbsolute } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { platformCommands } from '../lib/platform.mjs';
 
 const CRED_DIR = join(homedir(), '.vibehub');
 const CRED = join(CRED_DIR, 'credentials.json');
+const BINDING_DIR = '.vibehub';
+const BINDING_FILE = 'project.json';
+const PROJECT_CREATE_LOCK = 'project-create.lock';
+const PROJECT_CREATE_LOCK_STALE_MS = 10 * 60 * 1000;
 const DEFAULT_API = process.env.VIBEHUB_API || 'https://hub.supermind-ai.cn';
 const PLATFORM = platformCommands();
 const CLI_DISPLAY = `node "${resolve(process.argv[1])}"`;
@@ -44,11 +48,25 @@ function connectionKey(cred) {
   return `${camp}:${project}`;
 }
 
+function normalizeCredential(cred) {
+  if (!cred || typeof cred !== 'object' || Array.isArray(cred) || typeof cred.token !== 'string' || !cred.token) {
+    die('VibeHub 的本地连接信息损坏了。', '请保留文件并联系老师或技术支持');
+  }
+  if (cred.local_paths !== undefined && (!Array.isArray(cred.local_paths) || cred.local_paths.some((item) => typeof item !== 'string' || !isAbsolute(item)))) {
+    die('VibeHub 的本地连接信息损坏了。', '请保留文件并联系老师或技术支持');
+  }
+  return { ...cred, local_paths: [...new Set(cred.local_paths || [])] };
+}
+
 function normalizeStore(raw) {
-  if (raw?.version === 2 && raw.connections && typeof raw.connections === 'object' && !Array.isArray(raw.connections)) return raw;
+  if (raw?.version === 2 && raw.connections && typeof raw.connections === 'object' && !Array.isArray(raw.connections)) {
+    const connections = Object.fromEntries(Object.entries(raw.connections).map(([key, cred]) => [key, normalizeCredential(cred)]));
+    return { version: 2, active: raw.active ?? null, connections };
+  }
   if (raw?.token) {
-    const key = connectionKey(raw);
-    return { version: 2, active: key, connections: { [key]: raw } };
+    const cred = normalizeCredential(raw);
+    const key = connectionKey(cred);
+    return { version: 2, active: key, connections: { [key]: cred } };
   }
   die('VibeHub 的本地连接信息损坏了。', '请保留文件并联系老师或技术支持');
 }
@@ -66,10 +84,381 @@ function loadStore(required = true) {
 }
 
 function saveStore(data) {
-  mkdirSync(CRED_DIR, { recursive: true });
-  writeFileSync(CRED, JSON.stringify(data, null, 2), { mode: 0o600 });
+  writeJsonAtomic(CRED, data, 0o600);
   // Windows 的用户目录使用 ACL；POSIX 系统再收紧为仅本人可读写。
   if (process.platform !== 'win32') chmodSync(CRED, 0o600);
+}
+
+function writeFileAtomic(file, contents, mode = 0o600, validateDestination = null) {
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  validateDestination?.();
+  const temporary = join(dirname(file), `.${basename(file)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
+  try {
+    writeFileSync(temporary, contents, { mode, flag: 'wx' });
+    if (process.platform !== 'win32') chmodSync(temporary, mode);
+    validateDestination?.();
+    renameSync(temporary, file);
+    validateDestination?.();
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+}
+
+function writeJsonAtomic(file, data, mode = 0o600, validateDestination = null) {
+  writeFileAtomic(file, `${JSON.stringify(data, null, 2)}\n`, mode, validateDestination);
+}
+
+function canonicalDirectory(input = process.cwd()) {
+  const candidate = resolve(input);
+  if (!existsSync(candidate) || !statSync(candidate).isDirectory()) die('作品目录不存在。', '请检查目录路径后重试');
+  return realpathSync(candidate);
+}
+
+function bindingPath(dir) {
+  return join(dir, BINDING_DIR, BINDING_FILE);
+}
+
+function lstatOrNull(file) {
+  try { return lstatSync(file); }
+  catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function unsafeLocalMetadata() {
+  die('本地项目元数据路径不安全，已停止操作。', '请移除符号链接或异常 Git 指针后重试');
+}
+
+function validateBindingStorage(dir) {
+  const container = join(dir, BINDING_DIR);
+  const containerStat = lstatOrNull(container);
+  if (containerStat && (containerStat.isSymbolicLink() || !containerStat.isDirectory())) unsafeLocalMetadata();
+  const file = bindingPath(dir);
+  const fileStat = lstatOrNull(file);
+  if (fileStat && (fileStat.isSymbolicLink() || !fileStat.isFile())) unsafeLocalMetadata();
+  return { container, file, exists: Boolean(fileStat) };
+}
+
+function containsSensitiveField(value) {
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(([key, child]) =>
+    /token|authorization|cookie|secret|password|invite|real[_-]?name/i.test(key) || containsSensitiveField(child));
+}
+
+function readBinding(dir) {
+  const { file, exists } = validateBindingStorage(dir);
+  if (!exists) return null;
+  let binding;
+  try { binding = JSON.parse(readFileSync(file, 'utf8')); }
+  catch { die('作品目录绑定已损坏。', '不要手动修改 .vibehub/project.json；请联系老师或技术支持'); }
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+    die('作品目录绑定已损坏。', '不要手动修改 .vibehub/project.json；请联系老师或技术支持');
+  }
+  if (containsSensitiveField(binding)) {
+    die('作品目录绑定包含不安全字段，已停止操作。', '删除敏感字段后，使用 project link 重新关联');
+  }
+  const keys = Object.keys(binding).sort();
+  const finalKeys = ['connection_key', 'project_id', 'version'];
+  const pendingKeys = ['pending_request_id', 'version'];
+  const isFinal = JSON.stringify(keys) === JSON.stringify(finalKeys)
+    && binding.version === 1 && typeof binding.connection_key === 'string' && binding.connection_key
+    && typeof binding.project_id === 'string' && binding.project_id;
+  const isPending = JSON.stringify(keys) === JSON.stringify(pendingKeys)
+    && binding.version === 1 && typeof binding.pending_request_id === 'string'
+    && /^pc_[A-Za-z0-9_-]+$/.test(binding.pending_request_id);
+  if (!isFinal && !isPending) {
+    die('作品目录绑定已损坏。', '不要手动修改 .vibehub/project.json；请联系老师或技术支持');
+  }
+  return isFinal ? { kind: 'final', ...binding } : { kind: 'pending', ...binding };
+}
+
+function writeBinding(dir, binding) {
+  const initial = validateBindingStorage(dir);
+  if (!lstatOrNull(initial.container)) {
+    try { mkdirSync(initial.container, { mode: 0o700 }); }
+    catch (error) { if (error?.code !== 'EEXIST') throw error; }
+  }
+  const validateDestination = () => {
+    const current = validateBindingStorage(dir);
+    const containerStat = lstatOrNull(current.container);
+    if (!containerStat || containerStat.isSymbolicLink() || !containerStat.isDirectory()) unsafeLocalMetadata();
+    if (realpathSync(current.container) !== current.container || !isWithin(realpathSync(current.container), dir)) unsafeLocalMetadata();
+    if (current.file !== initial.file) unsafeLocalMetadata();
+  };
+  validateDestination();
+  writeJsonAtomic(initial.file, binding, 0o600, validateDestination);
+}
+
+function processIsAlive(pid, createdAt) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  if (!Number.isSafeInteger(createdAt) || Date.now() - createdAt >= PROJECT_CREATE_LOCK_STALE_MS) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH' && error?.code !== 'EINVAL';
+  }
+}
+
+function readProjectCreateLock(file) {
+  const fileStat = lstatOrNull(file);
+  if (!fileStat) return null;
+  if (fileStat.isSymbolicLink() || !fileStat.isFile()) unsafeLocalMetadata();
+  try {
+    const value = JSON.parse(readFileSync(file, 'utf8'));
+    if (value?.version !== 1 || !Number.isSafeInteger(value.pid) || !Number.isSafeInteger(value.created_at)
+      || typeof value.nonce !== 'string' || !value.nonce) {
+      unsafeLocalMetadata();
+    }
+    return value;
+  } catch (error) {
+    if (error instanceof CliError) throw error;
+    if (error?.code === 'ENOENT') return null;
+    unsafeLocalMetadata();
+  }
+}
+
+function sameProjectCreateLock(left, right) {
+  return Boolean(left && right && left.pid === right.pid && left.nonce === right.nonce && left.created_at === right.created_at);
+}
+
+function claimAndRemoveProjectCreateLock(file, expected) {
+  const tombstone = `${file}.claim-${process.pid}-${randomBytes(8).toString('hex')}`;
+  try { renameSync(file, tombstone); }
+  catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
+  const moved = readProjectCreateLock(tombstone);
+  if (sameProjectCreateLock(moved, expected)) {
+    rmSync(tombstone, { force: true });
+    return true;
+  }
+  // 路径在读取后已被新 owner 替换：把新锁放回，不按路径误删。
+  if (!lstatOrNull(file)) renameSync(tombstone, file);
+  else rmSync(tombstone, { force: true });
+  die('这个目录正在创建作品。', '请稍后重试');
+}
+
+function assertProjectCreateLock(lock) {
+  if (!sameProjectCreateLock(readProjectCreateLock(lock.file), lock)) {
+    die('这个目录的创建权已被其他进程接管。', '保留 pending 绑定并重试');
+  }
+}
+
+function prepareBindingContainer(dir) {
+  const initial = validateBindingStorage(dir);
+  if (!lstatOrNull(initial.container)) {
+    try { mkdirSync(initial.container, { mode: 0o700 }); }
+    catch (error) { if (error?.code !== 'EEXIST') throw error; }
+  }
+  const current = validateBindingStorage(dir);
+  const containerStat = lstatOrNull(current.container);
+  if (!containerStat || containerStat.isSymbolicLink() || !containerStat.isDirectory()) unsafeLocalMetadata();
+  if (realpathSync(current.container) !== current.container || !isWithin(realpathSync(current.container), dir)) unsafeLocalMetadata();
+  return current.container;
+}
+
+function acquireProjectCreateLock(dir) {
+  const container = prepareBindingContainer(dir);
+  const file = join(container, PROJECT_CREATE_LOCK);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const nonce = randomBytes(12).toString('base64url');
+    const createdAt = Date.now();
+    const temporary = join(container, `.${PROJECT_CREATE_LOCK}.${process.pid}.${nonce}.tmp`);
+    try {
+      const owner = { version: 1, pid: process.pid, nonce, created_at: createdAt };
+      writeFileSync(temporary, `${JSON.stringify(owner)}\n`, { flag: 'wx', mode: 0o600 });
+      linkSync(temporary, file);
+      if (prepareBindingContainer(dir) !== container) unsafeLocalMetadata();
+      const lock = { file, ...owner };
+      assertProjectCreateLock(lock);
+      return lock;
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const owner = readProjectCreateLock(file);
+      if (!owner) continue;
+      if (processIsAlive(owner.pid, owner.created_at)) {
+        die('这个目录正在创建作品。', '请等当前操作完成后再重试');
+      }
+      claimAndRemoveProjectCreateLock(file, owner);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+  }
+  die('这个目录正在创建作品。', '请稍后重试');
+}
+
+function releaseProjectCreateLock(lock) {
+  try {
+    claimAndRemoveProjectCreateLock(lock.file, lock);
+  } catch {
+    // 不删除不再属于本进程的锁，避免破坏另一个创建请求。
+  }
+}
+
+function isWithin(child, parent) {
+  const offset = relative(parent, child);
+  return offset === '' || (!offset.startsWith('..') && !isAbsolute(offset));
+}
+
+function canonicalFilePath(file) {
+  return join(realpathSync(dirname(file)), basename(file));
+}
+
+function validateExcludePath(commonDir) {
+  const canonicalCommon = realpathSync(commonDir);
+  const info = join(canonicalCommon, 'info');
+  let infoStat = lstatOrNull(info);
+  if (infoStat && (infoStat.isSymbolicLink() || !infoStat.isDirectory())) unsafeLocalMetadata();
+  if (!infoStat) {
+    mkdirSync(info);
+    infoStat = lstatOrNull(info);
+  }
+  if (!infoStat || infoStat.isSymbolicLink() || !infoStat.isDirectory()) unsafeLocalMetadata();
+  const canonicalInfo = realpathSync(info);
+  if (!isWithin(canonicalInfo, canonicalCommon)) unsafeLocalMetadata();
+  const exclude = join(canonicalInfo, 'exclude');
+  const excludeStat = lstatOrNull(exclude);
+  if (excludeStat && (excludeStat.isSymbolicLink() || !excludeStat.isFile())) unsafeLocalMetadata();
+  return { commonDir: canonicalCommon, exclude };
+}
+
+function worktreeCommonDir(marker, gitDir) {
+  const gitDirStat = lstatOrNull(gitDir);
+  if (!gitDirStat || gitDirStat.isSymbolicLink() || !gitDirStat.isDirectory()) unsafeLocalMetadata();
+  const canonicalGitDir = realpathSync(gitDir);
+  const backlink = join(canonicalGitDir, 'gitdir');
+  const backlinkStat = lstatOrNull(backlink);
+  if (!backlinkStat || backlinkStat.isSymbolicLink() || !backlinkStat.isFile()) unsafeLocalMetadata();
+  const backlinkTarget = resolve(dirname(backlink), readFileSync(backlink, 'utf8').trim());
+  if (canonicalFilePath(backlinkTarget) !== canonicalFilePath(marker)) unsafeLocalMetadata();
+  const commonPointer = join(canonicalGitDir, 'commondir');
+  const commonPointerStat = lstatOrNull(commonPointer);
+  if (!commonPointerStat || commonPointerStat.isSymbolicLink() || !commonPointerStat.isFile()) unsafeLocalMetadata();
+  const commonDir = resolve(canonicalGitDir, readFileSync(commonPointer, 'utf8').trim());
+  const canonicalCommon = realpathSync(commonDir);
+  if (!isWithin(canonicalGitDir, join(canonicalCommon, 'worktrees'))) unsafeLocalMetadata();
+  return canonicalCommon;
+}
+
+function findGitExclude(dir) {
+  let current = dir;
+  while (true) {
+    const dotGit = join(current, '.git');
+    const markerStat = lstatOrNull(dotGit);
+    if (markerStat) {
+      if (markerStat.isSymbolicLink()) unsafeLocalMetadata();
+      if (markerStat.isDirectory()) return validateExcludePath(realpathSync(dotGit));
+      if (!markerStat.isFile()) unsafeLocalMetadata();
+      const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, 'utf8'))?.[1]?.trim();
+      if (!pointer) unsafeLocalMetadata();
+      return validateExcludePath(worktreeCommonDir(dotGit, resolve(current, pointer)));
+    }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function ensureLocalGitExclude(dir) {
+  const target = findGitExclude(dir);
+  if (!target) return;
+  const { commonDir, exclude } = target;
+  const existing = existsSync(exclude) ? readFileSync(exclude, 'utf8') : '';
+  if (existing.split(/\r?\n/).includes('.vibehub/')) return;
+  const originalStat = lstatOrNull(exclude);
+  const mode = originalStat ? originalStat.mode & 0o777 : 0o600;
+  const validateDestination = () => {
+    const current = validateExcludePath(commonDir);
+    if (current.commonDir !== commonDir || current.exclude !== exclude || !isWithin(dirname(current.exclude), commonDir)) unsafeLocalMetadata();
+  };
+  validateDestination();
+  writeFileAtomic(exclude, `${existing}${existing && !existing.endsWith('\n') ? '\n' : ''}.vibehub/\n`, mode, validateDestination);
+}
+
+function addLocalPath(cred, dir) {
+  return { ...cred, local_paths: [...new Set([...(cred.local_paths || []), dir])] };
+}
+
+function connectionFingerprint(key) {
+  return createHash('sha256').update(key).digest('hex').slice(0, 12);
+}
+
+function pendingConnection(store, requestId) {
+  const fingerprint = /^pc_([a-f0-9]{12})_/.exec(requestId)?.[1];
+  const matches = fingerprint
+    ? Object.entries(store.connections).filter(([key]) => connectionFingerprint(key) === fingerprint)
+    : [];
+  if (matches.length !== 1) {
+    die('无法安全恢复这个作品创建请求。', '请保留 .vibehub/project.json 并联系老师或技术支持');
+  }
+  return matches[0];
+}
+
+function bindDirectory(store, key, dir) {
+  const cred = store.connections[key];
+  if (!cred || cred.project?.id == null) die('目标作品连接已失效。', `运行 ${CLI_DISPLAY} camps 查看连接`);
+  const current = readBinding(dir);
+  if (current?.kind === 'pending') die('这个目录有未完成的作品创建。', `重新运行 ${CLI_DISPLAY} project create --title "作品名" "${dir}"`);
+  if (current?.kind === 'final' && (current.connection_key !== key || String(current.project_id) !== String(cred.project.id))) {
+    die('这个目录已经绑定到另一个作品。', '请到正确的作品目录操作，不要覆盖绑定文件');
+  }
+  ensureLocalGitExclude(dir);
+  writeBinding(dir, { version: 1, connection_key: key, project_id: String(cred.project.id) });
+  store.connections[key] = addLocalPath(cred, dir);
+  store.active = key;
+  saveStore(store);
+  return store.connections[key];
+}
+
+function resolveDeployCredential(dir) {
+  const store = loadStore();
+  const binding = readBinding(dir);
+  if (binding?.kind === 'pending') {
+    die('这个目录的作品创建还没有完成。', `重新运行 ${CLI_DISPLAY} project create --title "作品名" "${dir}"`);
+  }
+  if (binding?.kind === 'final') {
+    const cred = store.connections[binding.connection_key];
+    if (!cred || String(cred.project?.id) !== String(binding.project_id)) {
+      die('目录绑定与本地连接不一致，已停止部署。', `运行 ${CLI_DISPLAY} camps 检查连接，再用 project link 修复`);
+    }
+    if (!cred.local_paths.includes(dir)) {
+      die('这个 binding 可能是从另一个目录复制来的，已停止操作。', `运行 ${CLI_DISPLAY} project link ${binding.connection_key} "${dir}" 明确登记此目录`);
+    }
+    ensureLocalGitExclude(dir);
+    return store.connections[binding.connection_key];
+  }
+  const entries = Object.entries(store.connections);
+  // 兼容最早期只保存 token/api 的单连接凭证；它可以继续部署，但不会制造无法校验的目录绑定。
+  if (entries.length === 1 && entries[0][1].project?.id == null) return entries[0][1];
+  if (entries.length === 1 && entries[0][1].local_paths.length === 0) {
+    return bindDirectory(store, entries[0][0], dir);
+  }
+  die('这个作品目录还没有绑定，无法确定部署目标。', `运行 ${CLI_DISPLAY} project link <完整连接标识> "${dir}"`);
+}
+
+function resolveReadCredential(dir) {
+  const store = loadStore();
+  const binding = readBinding(dir);
+  if (binding?.kind === 'pending') {
+    die('这个目录的作品创建还没有完成。', `重新运行 ${CLI_DISPLAY} project create --title "作品名" "${dir}"`);
+  }
+  if (binding?.kind === 'final') {
+    const cred = store.connections[binding.connection_key];
+    if (!cred || String(cred.project?.id) !== String(binding.project_id)) {
+      die('目录绑定与本地连接不一致，已停止操作。', `运行 ${CLI_DISPLAY} camps 检查连接，再用 project link 修复`);
+    }
+    if (!cred.local_paths.includes(dir)) {
+      die('这个 binding 可能是从另一个目录复制来的，已停止操作。', `运行 ${CLI_DISPLAY} project link ${binding.connection_key} "${dir}" 明确登记此目录`);
+    }
+    ensureLocalGitExclude(dir);
+    return store.connections[binding.connection_key];
+  }
+  const entries = Object.entries(store.connections);
+  if (entries.length === 1 && (entries[0][1].project?.id == null || entries[0][1].local_paths.length === 0)) return entries[0][1];
+  die('这个作品目录还没有绑定，无法确定目标作品。', `运行 ${CLI_DISPLAY} project link <完整连接标识> "${dir}"`);
 }
 
 async function api(path, { method = 'GET', body, token, form, credential } = {}) {
@@ -90,10 +479,10 @@ function previewId(url) {
   try { return /\/vibehub\/_preview\/([a-z0-9]+)\//i.exec(new URL(url).pathname)?.[1] || null; } catch { return null; }
 }
 
-async function grantPreview(url) {
+async function grantPreview(url, credential) {
   const pid = previewId(url);
   if (!pid) return url;
-  const grant = await api(`/api/previews/${encodeURIComponent(pid)}/grant`, { method: 'POST' });
+  const grant = await api(`/api/previews/${encodeURIComponent(pid)}/grant`, { method: 'POST', credential });
   return grant.preview_url;
 }
 
@@ -198,7 +587,7 @@ const cmds = {
       else die(`不认识参数 ${args[i]}。`, `用法：${CLI_DISPLAY} bind <邀请码> --name "真实姓名" --nickname "公开昵称"`);
     }
     // 先确认旧连接可读，避免服务端已签发 token 后才发现本地无法保存。
-    const store = loadStore(false);
+    loadStore(false);
     const api_base = process.env.VIBEHUB_API || DEFAULT_API;
     const res = await fetch(api_base + '/api/skill/bind', {
       method: 'POST',
@@ -208,9 +597,12 @@ const cmds = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) die(data.error?.message || '绑定失败', data.error?.hint);
-    const cred = { token: data.token, api: api_base, camp: data.camp, project: data.project,
+    // 联网期间 project link/create 可能已更新本地路径；回包后重读，不用旧快照覆盖。
+    const store = loadStore(false);
+    const key = connectionKey({ camp: data.camp, project: data.project, user: data.user });
+    const preservedPaths = store.connections[key]?.local_paths || [];
+    const cred = { token: data.token, api: api_base, camp: data.camp, project: data.project, local_paths: preservedPaths,
       user: data.user ? { id: data.user.id, username: data.user.username, display_name: data.user.display_name } : null };
-    const key = connectionKey(cred);
     store.version = 2;
     store.connections[key] = cred;
     store.active = key;
@@ -247,8 +639,100 @@ const cmds = {
     say(`${c.g}✓${c.x} 已切换到《${matches[0][1].camp?.name || query}》`);
   },
 
+  async project(action, ...args) {
+    if (action === 'link') {
+      const [key, directory, ...extra] = args;
+      if (!key || extra.length || String(directory || '').startsWith('-')) {
+        die('请提供完整连接标识。', `用法：${CLI_DISPLAY} project link <完整连接标识> [目录]`);
+      }
+      const dir = canonicalDirectory(directory || process.cwd());
+      const store = loadStore();
+      if (!Object.hasOwn(store.connections, key)) {
+        die('没有找到这个完整连接标识。', `运行 ${CLI_DISPLAY} camps 查看连接标识`);
+      }
+      const cred = bindDirectory(store, key, dir);
+      say(`${c.g}✓${c.x} 已关联《${cred.project?.title || cred.project?.id}》到当前目录`);
+      return;
+    }
+    if (action === 'create') {
+      let title = null;
+      let directory = null;
+      let from = null;
+      for (let i = 0; i < args.length; i += 1) {
+        if (args[i] === '--title') title = args[++i];
+        else if (args[i] === '--from') from = args[++i];
+        else if (!args[i].startsWith('-') && directory === null) directory = args[i];
+        else die(`不认识参数 ${args[i]}。`, `用法：${CLI_DISPLAY} project create --title "作品名" [--from <完整连接标识>] [目录]`);
+      }
+      if (!title || !String(title).trim()) die('请提供作品名称。', `用法：${CLI_DISPLAY} project create --title "作品名" [--from <完整连接标识>] [目录]`);
+      if (from !== null && (!from || String(from).startsWith('-'))) die('请在 --from 后提供完整连接标识。', `运行 ${CLI_DISPLAY} camps 查看`);
+      const dir = canonicalDirectory(directory || process.cwd());
+      const observed = readBinding(dir);
+      if (observed?.kind === 'final') die('这个目录已经绑定到一个作品。', '直接 deploy，或到另一个目录创建新作品');
+      const observedStore = loadStore();
+      if (!observed && from && !Object.hasOwn(observedStore.connections, from)) {
+        die('没有找到 --from 指定的完整连接标识。', `运行 ${CLI_DISPLAY} camps 查看`);
+      }
+      if (!observed && !from && Object.keys(observedStore.connections).length !== 1) {
+        die('多个作品连接中无法猜测新作品所属营地。', `运行 ${CLI_DISPLAY} camps，再加 --from <完整连接标识>`);
+      }
+
+      const createLock = acquireProjectCreateLock(dir);
+      try {
+        const existing = readBinding(dir);
+        if (existing?.kind === 'final') die('这个目录已经绑定到一个作品。', '直接 deploy，或到另一个目录创建新作品');
+        const authorizationStore = loadStore();
+        let authorization;
+        if (existing) {
+          authorization = pendingConnection(authorizationStore, existing.pending_request_id);
+          if (from && from !== authorization[0]) die('--from 与待恢复创建请求的授权连接不一致。', `使用完整连接标识 ${authorization[0]}`);
+        } else if (from) {
+          authorization = Object.hasOwn(authorizationStore.connections, from) ? [from, authorizationStore.connections[from]] : null;
+          if (!authorization) die('没有找到 --from 指定的完整连接标识。', `运行 ${CLI_DISPLAY} camps 查看`);
+        } else {
+          const entries = Object.entries(authorizationStore.connections);
+          if (entries.length !== 1) die('多个作品连接中无法猜测新作品所属营地。', `运行 ${CLI_DISPLAY} camps，再加 --from <完整连接标识>`);
+          authorization = entries[0];
+        }
+        const [authorizationKey, authorizer] = authorization;
+        if (!authorizer) die('当前营地连接已失效。', `运行 ${CLI_DISPLAY} camps 查看连接，或重新 bind`);
+        ensureLocalGitExclude(dir);
+        const requestId = existing?.pending_request_id
+          || `pc_${connectionFingerprint(authorizationKey)}_${randomBytes(12).toString('base64url')}`;
+        if (!existing) writeBinding(dir, { version: 1, pending_request_id: requestId });
+
+        const data = await api('/api/skill/projects', {
+          method: 'POST', body: { title: String(title).trim(), request_id: requestId }, credential: authorizer,
+        });
+        assertProjectCreateLock(createLock);
+        if (!data.token || !data.project?.id || !data.camp) die('平台返回的作品连接不完整。', '保留目录后重试；仍有问题请联系老师');
+        const cred = normalizeCredential({
+          token: data.token,
+          api: authorizer.api || DEFAULT_API,
+          camp: data.camp,
+          project: data.project,
+          user: data.user ? { id: data.user.id, username: data.user.username, display_name: data.user.display_name } : authorizer.user,
+          local_paths: [dir],
+        });
+        const key = connectionKey(cred);
+        const store = loadStore();
+        store.connections[key] = cred;
+        store.active = key;
+        saveStore(store);
+        writeBinding(dir, { version: 1, connection_key: key, project_id: String(data.project.id) });
+        say(`${c.g}✓${c.x} ${data.message || `已创建《${data.project.title}》`}`);
+        say(`下一步：运行 ${c.bold}${CLI_DISPLAY} deploy "${dir}"${c.x}`);
+        return;
+      } finally {
+        releaseProjectCreateLock(createLock);
+      }
+    }
+    die('请指定 project create 或 project link。', `运行 ${CLI_DISPLAY} help 查看用法`);
+  },
+
   async status() {
-    const s = await api('/api/skill/project');
+    const credential = resolveReadCredential(canonicalDirectory(process.cwd()));
+    const s = await api('/api/skill/project', { credential });
     const p = s.project;
     const pendingPreviewUrl = cleanPreviewUrl(s.pending_version?.preview_url);
     say(`\n${c.bold}${p.title}${c.x}  ${c.d}${s.camp.name}${c.x}`);
@@ -299,15 +783,19 @@ const cmds = {
   },
 
   async deploy(...args) {
-    const cred = loadCred();
     let summary = null, flows = [], label = null, dir = process.cwd();
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '--summary') summary = args[++i];
       else if (args[i] === '--flows') flows = String(args[++i]).split(',').map((s) => s.trim()).filter(Boolean);
       else if (args[i] === '--label') label = args[++i];
-      else if (!args[i].startsWith('-')) dir = resolve(args[i]);
+      else if (!args[i].startsWith('-')) dir = args[i];
+      else die(`不认识参数 ${args[i]}。`, `运行 ${CLI_DISPLAY} help 查看用法`);
     }
 
+    dir = canonicalDirectory(dir);
+    const cred = resolveDeployCredential(dir);
+    const suffix = String(cred.project?.id || '').slice(-6);
+    say(`${c.d}目标：${cred.camp?.name || cred.camp?.slug || '营地'} · ${cred.project?.title || '作品'}${suffix ? ` (${suffix})` : ''}${c.x}`);
     const src = pickSourceDir(dir);
     if (!existsSync(join(src, 'index.html'))) {
       die('没找到 index.html，你的网页需要有一个首页文件。',
@@ -351,10 +839,10 @@ const cmds = {
   },
 
   async open() {
-    loadCred();
-    const s = await api('/api/skill/project');
+    const credential = resolveReadCredential(canonicalDirectory(process.cwd()));
+    const s = await api('/api/skill/project', { credential });
     const openingPreview = !!s.pending_version?.preview_url;
-    const url = openingPreview ? await grantPreview(s.pending_version.preview_url) : s.project.live_url;
+    const url = openingPreview ? await grantPreview(s.pending_version.preview_url, credential) : s.project.live_url;
     if (!url) die('还没有可打开的版本。', `先运行 ${CLI_DISPLAY} deploy`);
     try {
       execFileSync(PLATFORM.opener.command, [...PLATFORM.opener.prefix, url]);
@@ -365,7 +853,8 @@ const cmds = {
   },
 
   async logs() {
-    const s = await api('/api/skill/project');
+    const credential = resolveReadCredential(canonicalDirectory(process.cwd()));
+    const s = await api('/api/skill/project', { credential });
     say(`\n${c.bold}最近发生了什么${c.x}`);
     for (const e of s.timeline || []) {
       const icon = { submit: '↑', publish: '✓', reject: '↩' }[e.kind] || '·';
@@ -382,6 +871,10 @@ ${c.bold}vibehub${c.x} — 把你的作品交给 VibeHub
       --name "真实姓名" --nickname "公开昵称"（首次连接学员码时使用）
   ${c.bold}${CLI_DISPLAY} camps${c.x}            查看已经连接的营地
   ${c.bold}${CLI_DISPLAY} use <营地标识>${c.x}   切换当前营地
+  ${c.bold}${CLI_DISPLAY} project create --title "作品名" [--from <完整连接标识>] [目录]${c.x}
+                              为目录创建并绑定一个新作品
+  ${c.bold}${CLI_DISPLAY} project link <完整连接标识> [目录]${c.x}
+                              把目录关联到已有作品
   ${c.bold}${CLI_DISPLAY} deploy${c.x}           打包当前目录并提交
       --summary "本次更新说明"
       --flows "上传声音,查看地图"    声明核心操作路径（诊断会用到）

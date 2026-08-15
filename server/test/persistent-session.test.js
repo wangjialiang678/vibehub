@@ -11,7 +11,7 @@ process.env.VIBEHUB_PREVIEW_CLAIM_SECRET = 'persistent-session-test-secret-at-le
 
 const { buildApp } = await import('../src/index.js');
 const { db, now } = await import('../src/lib/db.js');
-const { issueToken, revokeToken } = await import('../src/lib/auth.js');
+const { issueToken, resolveToken, revokeToken } = await import('../src/lib/auth.js');
 const { paths, CONSOLE_ORIGIN } = await import('../src/lib/config.js');
 
 const app = await buildApp({ probePreview: async () => ({ status: 'ok' }) });
@@ -197,4 +197,27 @@ test('退出登录与邀请码撤销会立即终止长期会话', async () => {
   });
   assert.equal(revoked.statusCode, 200);
   assert.equal((await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `vh_session=${secondToken}` } })).statusCode, 401);
+});
+
+test('同一邀请码的长期网页会话有上限，超出时只淘汰最久未用的会话', async () => {
+  createTeacher({ inviteCode: 'PERSISTENT-BOUNDED' });
+  const tokens = [];
+  for (let index = 0; index < 12; index += 1) {
+    const login = await app.inject({ method: 'POST', url: '/api/session/redeem', payload: { code: 'PERSISTENT-BOUNDED' } });
+    assert.equal(login.statusCode, 200, login.body);
+    tokens.push(sessionCookie(login).value);
+    const identity = resolveToken(tokens.at(-1));
+    const usedAt = `2000-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`;
+    db.prepare('UPDATE tokens SET created_at=?,last_used_at=? WHERE id=?').run(usedAt, usedAt, identity.id);
+  }
+
+  const active = db.prepare(`SELECT COUNT(*) AS n FROM tokens
+    WHERE invite_code=? AND kind='web' AND revoked_at IS NULL`).get('PERSISTENT-BOUNDED').n;
+  const total = db.prepare(`SELECT COUNT(*) AS n FROM tokens
+    WHERE invite_code=? AND kind='web'`).get('PERSISTENT-BOUNDED').n;
+  assert.equal(active, 10);
+  assert.equal(total, 10);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `vh_session=${tokens[0]}` } })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `vh_session=${tokens[1]}` } })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/me', headers: { cookie: `vh_session=${tokens.at(-1)}` } })).statusCode, 200);
 });

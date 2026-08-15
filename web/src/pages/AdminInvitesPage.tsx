@@ -7,10 +7,10 @@ import { PageState, StatusPill, copyToClipboard } from '../components/Ui';
 import { api, readableError } from '../lib/api';
 import { formatDateTime } from '../lib/presentation';
 import type { InviteListItem, RosterEntry } from '../lib/types';
-import { buildVibeHubDeployPrompt } from '../lib/vibehubDeployPrompt';
+import { buildVibeHubDeployPrompt, publicAppBaseUrl } from '../lib/vibehubDeployPrompt';
+export { publicAppBaseUrl } from '../lib/vibehubDeployPrompt';
 
 type InviteRole = 'student' | 'teacher';
-type StudentGuideKind = 'browser' | 'ai';
 interface CreateInviteInput { count: number; role: InviteRole; max_devices: number; names?: string[] }
 
 const STUDENT_INVITE_PLACEHOLDER = 'CAMP-XXXX';
@@ -26,69 +26,41 @@ export function parseRosterImport(value: string) {
   }).filter((entry) => entry.real_name);
 }
 
-export function publicAppBaseUrl(configuredUrl?: string, browserOrigin?: string) {
-  const baseUrl = configuredUrl?.trim()
-    || browserOrigin?.trim()
-    || (typeof window !== 'undefined' ? window.location.origin : '');
-  return baseUrl.replace(/\/$/, '');
-}
-
-export function buildStudentBrowserGuide(campName: string, origin: string, code = STUDENT_INVITE_PLACEHOLDER) {
-  const baseUrl = origin.replace(/\/$/, '');
-  return [
-    `欢迎加入「${campName}」！`,
-    '',
-    '网页登录并提交游戏：',
-    `1. 打开 ${baseUrl}/login`,
-    `2. 输入你自己的邀请码：${code}`,
-    '3. 登录后点击“提交我的游戏”。',
-    '4. 上传网页 HTML、ZIP 或网页文件夹。',
-    '每人一码，不可互换或与他人共用。',
-  ].join('\n');
-}
-
 export function buildStudentAiGuide(campName: string, origin: string, code = STUDENT_INVITE_PLACEHOLDER) {
   const baseUrl = origin.replace(/\/$/, '');
   return [
     `欢迎加入「${campName}」！`,
     '',
-    '使用 AI 助手部署游戏：',
-    `官网安装说明：${baseUrl}/install`,
-    '把下面整段话发给 WorkBuddy、Codex 或其他 Agent：',
+    '推荐：把下面整段话一次发给正在开发游戏的 AI 助手：',
     '',
     buildVibeHubDeployPrompt(baseUrl, code),
     '',
     '每人一码，不可互换或与他人共用。',
+    '',
+    `网页备用：如果不用 AI，请打开 ${baseUrl}/login，输入上面同一个邀请码，再上传网页 HTML、ZIP 或网页文件夹。`,
   ].join('\n');
 }
 
 export function buildStudentInviteMessages(codes: string[], campName: string, origin: string) {
-  return codes.map((code) => [
-    '方式一：网页登录提交',
-    buildStudentBrowserGuide(campName, origin, code),
-    '',
-    '方式二：让 AI 助手部署',
-    buildStudentAiGuide(campName, origin, code),
-  ].join('\n'));
+  return codes.map((code) => buildStudentAiGuide(campName, origin, code));
 }
 
-export async function copyTeacherStudentGuide(message: string, kind: StudentGuideKind, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
+export async function copyTeacherStudentGuide(message: string, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
   try {
     await copy(message);
-    setNotice(kind === 'browser' ? '网页登录说明已复制' : 'AI 部署说明已复制');
+    setNotice('学员完整说明已复制');
   } catch {
-    setNotice(kind === 'browser' ? '网页登录说明暂时无法复制。' : 'AI 部署说明暂时无法复制。');
+    setNotice('学员完整说明暂时无法复制。');
   }
 }
 
 export function TeacherStudentGuide({ campName, origin, onCopy }: {
   campName: string;
   origin: string;
-  onCopy: (message: string, kind: StudentGuideKind) => void;
+  onCopy: (message: string) => void;
 }) {
-  const browserGuide = buildStudentBrowserGuide(campName, origin);
   const aiGuide = buildStudentAiGuide(campName, origin);
-  return <section className="panel student-guide"><header><div><p className="eyebrow">转发给学员</p><h2>发给学员的使用说明</h2></div><span>生成邀请码后，把 CAMP-XXXX 换成学员自己的码</span></header><div className="student-guide-grid"><article className="student-guide-card"><div><strong>网页登录提交</strong><span>不安装 Skill，直接上传作品</span></div><pre>{browserGuide}</pre><button type="button" className="button button-outline" onClick={() => onCopy(browserGuide, 'browser')}>复制网页登录说明</button></article><article className="student-guide-card"><div><strong>AI 助手部署</strong><span>支持 macOS、Windows 和主流 Agent</span></div><pre>{aiGuide}</pre><button type="button" className="button button-outline" onClick={() => onCopy(aiGuide, 'ai')}>复制 AI 部署说明</button></article></div></section>;
+  return <section className="panel student-guide"><header><div><p className="eyebrow">转发给学员</p><h2>发给学员的使用说明</h2></div><span>生成邀请码后，把 CAMP-XXXX 换成学员自己的码</span></header><div className="student-guide-grid" style={{ gridTemplateColumns: '1fr' }}><article className="student-guide-card"><div><strong>AI 助手部署（推荐）</strong><span>一次复制包含安装、作品确认和提交；网页上传作为备用</span></div><pre>{aiGuide}</pre><button type="button" className="button button-outline" onClick={() => onCopy(aiGuide)}>复制完整说明</button></article></div></section>;
 }
 
 export async function copyStudentInviteMessage(message: string, index: number, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
@@ -157,7 +129,7 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
       client.invalidateQueries({ queryKey: ['invites', campId] });
     },
   });
-  const revoke = useMutation({ mutationFn: async (invite: InviteListItem) => api.revokeInvite(await api.resolveInviteCode(campId, invite.code_masked)), onSuccess: (data) => { setNotice(`邀请码已撤销，${data.revoked_tokens} 台设备已同时失效。`); client.invalidateQueries({ queryKey: ['invites', campId] }); } });
+  const revoke = useMutation({ mutationFn: async (invite: InviteListItem) => api.revokeInvite(await api.resolveInviteCode(campId, invite.code_masked)), onSuccess: (data) => { setNotice(`邀请码已撤销，${data.revoked_devices} 台设备的相关连接已同时失效。`); client.invalidateQueries({ queryKey: ['invites', campId] }); } });
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const names = parseRosterNames(rosterNames);
@@ -175,8 +147,8 @@ function InvitesDesk({ campId, campSlug, campName }: { campId: string; campSlug:
     }
     void copyStudentInviteMessage(value, index, copyToClipboard, setNotice);
   };
-  const copyGuide = (message: string, kind: StudentGuideKind) => {
-    void copyTeacherStudentGuide(message, kind, copyToClipboard, setNotice);
+  const copyGuide = (message: string) => {
+    void copyTeacherStudentGuide(message, copyToClipboard, setNotice);
   };
   const exportCsv = async () => {
     try {

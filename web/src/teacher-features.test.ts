@@ -43,7 +43,7 @@ describe('老师端 P0 功能', () => {
     expect(source).toContain('只显示这一次');
     expect(source).toContain('复制全部');
     expect(source).toContain('导出 CSV');
-    expect(source).toContain('revoked_tokens');
+    expect(source).toContain('revoked_devices');
   });
 
   it('shows overview metrics, stalled projects, and recent activity', () => {

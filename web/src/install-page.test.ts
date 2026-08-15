@@ -36,7 +36,8 @@ describe('学生安装部署 Skill', () => {
     expect(html).toContain('复制这段话给 AI');
     expect(html.match(/<button/g)).toHaveLength(1);
     expect(html).toContain('VibeHub Deploy');
-    expect(html).toContain('https://hub.example.test/downloads/vibehub-skill/');
+    expect(html).toContain('https://hub.example.test/downloads/vibehub-skill/install.mjs');
+    expect(html).toContain('立即部署当前游戏');
     for (const paragraph of prompt.split('\n\n')) expect(html).toContain(paragraph);
     expect(html).toContain('href="/login"');
     expect(html).toContain('直接网页登录提交');
@@ -67,11 +68,12 @@ describe('学生安装部署 Skill', () => {
     expect(setNotice).toHaveBeenLastCalledWith('复制失败，请手动选中文字复制');
   });
 
-  it('保留复制、粘贴给 AI、提供邀请码并部署的三步说明', () => {
+  it('说明一次粘贴即可安装、绑定并部署，不要求第二次发指令', () => {
     const html = render();
     expect(html).toContain('复制这段话');
     expect(html).toContain('粘贴给 AI');
-    expect(html).toContain('提供邀请码并部署');
+    expect(html).toContain('一次完成安装与部署');
+    expect(html).not.toContain('游戏做好后，说');
     expect(html.match(/<article/g)).toHaveLength(3);
   });
 });

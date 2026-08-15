@@ -14,6 +14,7 @@ import {
   validateSubmissionMeta,
 } from '../services/version-submission.js';
 import { bindInvite, normalizeInviteCode } from '../services/invite-access.js';
+import { createStudentProject, StudentProjectCreationError } from '../services/student-project-creation.js';
 
 const err = (reply, code, status, message, hint, extra = {}) =>
   reply.code(status).send({ error: { code, message, ...(hint ? { hint } : {}), ...extra } });
@@ -127,6 +128,27 @@ export default async function skillRoutes(app, {
       return err(reply, ...result.error);
     }
     return result;
+  });
+
+  // ── 学员通过 AI 创建独立作品，并获得只作用于该作品的派生凭证 ──
+  app.post('/api/skill/projects', { preHandler: authRequired(['student']) }, async (req, reply) => {
+    if (req.authSource !== 'bearer' || req.auth.kind !== 'skill') {
+      return err(reply, 'not_found', 404, '找不到这个内容。');
+    }
+    try {
+      const result = createStudentProject(req.auth, req.body || {});
+      req.log.info({ user_id: req.auth.user_id, project_id: result.project.id, result: result.created ? 'created' : 'reconnected' },
+        '学生 Skill 项目连接已准备');
+      const { created, ...body } = result;
+      return reply.header('cache-control', 'no-store').code(created ? 201 : 200).send(body);
+    } catch (error) {
+      if (error instanceof StudentProjectCreationError) {
+        if (error.retryAfterSeconds) reply.header('retry-after', error.retryAfterSeconds);
+        return err(reply, error.code, error.status, error.message, error.hint);
+      }
+      req.log.error({ user_id: req.auth.user_id, error_code: error?.code || 'unknown' }, '学生 Skill 项目创建失败');
+      return err(reply, 'project_create_failed', 500, '作品没有创建成功，请稍后重试。');
+    }
   });
 
   // ── 项目状态 ─────────────────────────────────────────────────────

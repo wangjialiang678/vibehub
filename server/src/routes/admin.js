@@ -1,6 +1,6 @@
 import { nanoid, customAlphabet } from 'nanoid';
 import { db, now } from '../lib/db.js';
-import { authRequired, assertProjectAccess, isTeacher, revokeInviteAndTokens } from '../lib/auth.js';
+import { authRequired, assertProjectAccess, countDevices, isTeacher, revokeInviteAndTokens } from '../lib/auth.js';
 import { publishVersion, suspendSite } from '../services/publish.js';
 import { projectSnapshot, versionView, diagnosisView } from './_shared.js';
 import { pruneProjectArtifacts } from '../services/storage.js';
@@ -128,8 +128,7 @@ export default async function adminRoutes(app) {
         intended_user: r.intended_user, verification_status: r.verification_status,
         bound_project: r.bound_project,
         created_at: r.created_at, bound_at: r.bound_at,
-        devices: db.prepare(`SELECT COUNT(*) AS n FROM tokens WHERE invite_code=? AND kind='skill'
-                             AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>=?)`).get(r.code, now()).n,
+        devices: countDevices(r.code),
       })),
     };
   });
@@ -185,8 +184,14 @@ export default async function adminRoutes(app) {
   app.post('/api/invites/:code/revoke', { preHandler: teacherOnly }, async (req, reply) => {
     const inv = db.prepare('SELECT * FROM invites WHERE code=?').get(req.params.code);
     if (!inv || inv.camp_id !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个邀请码。');
-    const revoked = revokeInviteAndTokens(inv.code);
-    return { ok: true, revoked_tokens: revoked, message: `邀请码已撤销，${revoked} 台设备的连接已同时失效。` };
+    const revokedDevices = countDevices(inv.code);
+    const revokedTokens = revokeInviteAndTokens(inv.code);
+    return {
+      ok: true,
+      revoked_devices: revokedDevices,
+      revoked_tokens: revokedTokens,
+      message: `邀请码已撤销，${revokedDevices} 台设备的相关连接已同时失效。`,
+    };
   });
 
   // ── 审核队列 ─────────────────────────────────────────────────────

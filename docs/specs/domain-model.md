@@ -84,7 +84,7 @@ CREATE TABLE invites (
   status       TEXT NOT NULL,               -- unused | bound | revoked | expired
   bound_user_id TEXT REFERENCES users(id),
   bound_project_id TEXT REFERENCES projects(id),
-  max_devices  INTEGER NOT NULL DEFAULT 3,  -- 一个码能绑几台 AI 工具；网页短期会话不计入
+  max_devices  INTEGER NOT NULL DEFAULT 3,  -- 一个码能绑几台 AI 工具；网页长期会话另行限制为 10 个
   expires_at   TEXT,
   created_at   TEXT NOT NULL,
   bound_at     TEXT,
@@ -117,12 +117,26 @@ CREATE TABLE projects (
   live_version_id    TEXT REFERENCES versions(id),  -- 当前正式发布版本
   pending_version_id TEXT REFERENCES versions(id),  -- 当前待审核版本
   umami_website_id   TEXT,
+  creation_request_id TEXT,                         -- Skill 自助创建幂等键；普通/首个项目为空
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE (camp_id, slug)
 );
+CREATE UNIQUE INDEX idx_projects_creation_request
+  ON projects(owner_user_id, camp_id, creation_request_id)
+  WHERE creation_request_id IS NOT NULL;
 ```
 
 > 作品正式地址由 `supermind-ai.cn/vibehub/<username>/<slug>/` 生成。当前表结构按课程内约束 `UNIQUE (camp_id, slug)`，URL 中同时包含用户名和作品 slug；项目身份不应按 Host 推导。
+
+同一用户在同一营地可以拥有任意多个项目。学生用已有 Skill token 创建后续项目时，服务端只从 token 读取 user/camp，不接受客户端自报 owner、camp、slug 或目标项目；`creation_request_id` 只用于网络重试幂等，不构成项目配额。
+
+### 1.4.1 tokens — 项目级凭证补充
+
+Skill token 始终只授权一个 `project_id`。邀请码直接 bind 签发的设备根 token，其 `derived_from_token_id` 为 `NULL`；学生自助创建后续项目时签发派生 token，记录调用 token，并继承原 `invite_code`。
+
+- 设备数只统计未派生的 Skill 根 token，创建多个项目不消耗设备名额。
+- 撤销邀请码仍按 `invite_code` 吊销根 token 和全部派生 token。
+- 派生 token 不能访问原项目，原 token 也不能访问新项目；读取、提交、预览、诊断和 BaaS 继续执行单项目 scope。
 
 ### 1.5 versions — 版本（内容快照）
 

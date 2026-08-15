@@ -65,7 +65,7 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 ```
 错误：`invite_not_found` · `invite_revoked` · `invite_expired` · `invite_device_limit`（已绑满 `max_devices` 台 AI 工具）· `invite_rate_limited`
 
-`POST /api/session/redeem` 使用同一绑定逻辑，并接受可选布尔字段 `remember_me`（省略时默认为 `true`）。网页会话不计入 `max_devices`。勾选“记住我”时，浏览器 cookie 使用浏览器兼容的 400 天 `Max-Age`，每次成功的 cookie 鉴权都会以相同安全属性滑动续期，因此持续使用的设备没有固定 400 天上限；取消勾选时只签发不含 `Max-Age`/`Expires` 的浏览器会话 cookie，后续鉴权保持该选择。两种网页 token 都没有固定服务端到期时间，并且可随时吊销。仍有效的旧版 12 小时会话会在下一次成功鉴权时无感升级。主动退出、邀请码撤销或管理员吊销会即时使服务端 token 失效；清除网站数据、无痕模式结束或浏览器在长期未使用后清除 cookie 时也需要重新输入邀请码。Skill Bearer token 的行为不受此规则影响。
+`POST /api/session/redeem` 使用同一绑定逻辑，并接受可选布尔字段 `remember_me`（省略时默认为 `true`）。网页会话不计入 `max_devices`，每个邀请码最多保留 10 个网页会话，第 11 次登录起会在同一事务内删除最久未使用的会话行，避免同一明码无限放大长期凭证或数据表。勾选“记住我”时，浏览器 cookie 使用浏览器兼容的 400 天 `Max-Age`，每次成功的 cookie 鉴权都会以相同安全属性滑动续期；取消勾选时只签发不含 `Max-Age`/`Expires` 的浏览器会话 cookie，后续鉴权保持该选择。两种网页 token 都没有固定服务端到期时间，并且可随时吊销。仍有效的旧版 12 小时会话会在下一次成功鉴权时无感升级。主动退出、邀请码撤销或管理员吊销会即时使服务端 token 失效；清除网站数据、无痕模式结束或浏览器在长期未使用后清除 cookie 时也需要重新输入邀请码。Skill Bearer token 的行为不受此规则影响。
 
 ### `GET /api/skill/project`
 返回当前项目全貌，供 `vibehub status` 输出。

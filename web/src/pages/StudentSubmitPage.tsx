@@ -1,16 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { AppShell, ModeTabs } from '../components/Shell';
 import { LoginRequired, PageState, copyToClipboard } from '../components/Ui';
 import { api, readableError } from '../lib/api';
 import { prepareSubmissionFiles } from '../lib/submissionFiles';
+import { buildVibeHubDeployPrompt, publicAppBaseUrl } from '../lib/vibehubDeployPrompt';
 import type { MeResponse, SubmissionMeta, SubmissionResponse } from '../lib/types';
 
 type SubmissionMode = 'web' | 'ai';
 type SubmissionStage = 'idle' | 'preparing' | 'uploading' | 'checking' | 'success';
-
-export const AI_SUBMISSION_PROMPT = '使用邀请码加入 VibeHub，然后部署我的游戏。';
 
 export interface SubmissionUiState {
   stage: SubmissionStage;
@@ -72,9 +70,9 @@ export async function executeSubmission(input: SubmissionInput, dependencies: Su
   }
 }
 
-export async function copyAiSubmissionPrompt(copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
+export async function copyAiSubmissionPrompt(prompt: string, copy: (value: string) => Promise<void>, setNotice: (value: string) => void) {
   try {
-    await copy(AI_SUBMISSION_PROMPT);
+    await copy(prompt);
     setNotice('提示词已复制，可以粘贴给 AI 助手了。');
   } catch (caught) {
     setNotice(readableError(caught, '暂时无法复制，请手动选中提示词。'));
@@ -103,13 +101,7 @@ export function StudentSubmitPageView({ state }: { state: StudentSubmitPageState
   if (state.status === 'pending') return <PageState />;
   if (state.status === 'error') return <LoginRequired />;
   if (!state.me.project_id) {
-    return <AppShell active="提交作品" role="student" campSlug={state.me.camp.slug} avatar={state.me.user.display_name}>
-      <main className="dashboard-content narrow-content submit-no-project">
-        <p className="breadcrumb">{state.me.camp.name}　/　提交作品</p>
-        <h1>作品空间还在准备中</h1>
-        <p className="empty-copy">老师为你创建项目后，就能在这里上传网页，或请 AI 助手帮你部署。</p>
-      </main>
-    </AppShell>;
+    return <NoProjectAiStart campName={state.me.camp.name} campSlug={state.me.camp.slug} userName={state.me.user.display_name} />;
   }
 
   return <SubmitWorkspace
@@ -120,7 +112,24 @@ export function StudentSubmitPageView({ state }: { state: StudentSubmitPageState
   />;
 }
 
-export function SubmitWorkspace({ projectId, campName, campSlug, userName, initialSubmissionState, initialMode = 'web' }: { projectId: string; campName: string; campSlug: string; userName: string; initialSubmissionState?: SubmissionUiState; initialMode?: SubmissionMode }) {
+function NoProjectAiStart({ campName, campSlug, userName }: { campName: string; campSlug: string; userName: string }) {
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const prompt = buildVibeHubDeployPrompt(publicAppBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL));
+  const copyPrompt = () => void copyAiSubmissionPrompt(prompt, copyToClipboard, setCopyNotice);
+
+  return <AppShell active="提交作品" role="student" campSlug={campSlug} avatar={userName}>
+    <main className="dashboard-content narrow-content submit-no-project">
+      <p className="breadcrumb">{campName}　/　提交作品</p>
+      <h1>让 AI 创建并提交第一个作品</h1>
+      <p className="empty-copy">不用等老师先创建项目。把下面的完整指令一次粘贴给正在开发作品的 AI，它会创建独立作品并立即部署。</p>
+      <section className="panel ai-submit-panel">
+        <div className="ai-prompt-card"><span>完整复制给 AI</span><blockquote>{prompt}</blockquote><button type="button" className="button button-coral" onClick={copyPrompt}>复制完整指令给 AI</button>{copyNotice && <p role="status">{copyNotice}</p>}</div>
+      </section>
+    </main>
+  </AppShell>;
+}
+
+export function SubmitWorkspace({ projectId, campName, campSlug, userName, publicOrigin, initialSubmissionState, initialMode = 'ai' }: { projectId: string; campName: string; campSlug: string; userName: string; publicOrigin?: string; initialSubmissionState?: SubmissionUiState; initialMode?: SubmissionMode }) {
   const queryClient = useQueryClient();
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<SubmissionMode>(initialMode);
@@ -133,6 +142,7 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, initi
   const busy = stage === 'preparing' || stage === 'uploading' || stage === 'checking';
   const flows = parseSubmissionFlows(flowsText);
   const hasFiles = files.length > 0 || Boolean(initialSubmissionState?.hasFiles);
+  const prompt = buildVibeHubDeployPrompt(publicOrigin || publicAppBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL));
 
   useEffect(() => {
     folderInputRef.current?.setAttribute('webkitdirectory', '');
@@ -155,7 +165,7 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, initi
   };
 
   const copyPrompt = () => {
-    void copyAiSubmissionPrompt(copyToClipboard, setCopyNotice);
+    void copyAiSubmissionPrompt(prompt, copyToClipboard, setCopyNotice);
   };
 
   return <AppShell active="提交作品" role="student" campSlug={campSlug} avatar={userName}>
@@ -199,9 +209,9 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, initi
           <footer className="submit-actions"><div><strong>提交后的路径</strong><span>自动诊断　→　老师审核　→　正式上线</span></div><button className="button button-coral" type="submit" disabled={!hasFiles || busy}>{busy ? '正在提交…' : error ? '重新提交' : stage === 'success' ? '再提交一个版本' : '提交这个版本'}</button></footer>
         </form>
         : <section className="panel ai-submit-panel">
-          <div className="ai-submit-copy"><p className="eyebrow">AI 部署助手</p><h2>让助手从项目构建到提交</h2><p>如果作品使用 React / Vite 等开发，需要先构建成可访问的网页。安装部署助手后，把下面这句话发给你的 AI。</p><Link className="button button-outline" to="/install">安装部署助手 →</Link></div>
-          <div className="ai-prompt-card"><span>复制给 AI 的提示</span><blockquote>{AI_SUBMISSION_PROMPT}</blockquote><button type="button" className="button button-coral" onClick={copyPrompt}>复制提示词</button>{copyNotice && <p role="status">{copyNotice}</p>}</div>
-          <ol className="ai-submit-steps"><li><b>1</b><div><strong>安装助手</strong><span>只需在这台电脑安装一次</span></div></li><li><b>2</b><div><strong>告诉 AI</strong><span>粘贴上方提示，不要附加会话信息</span></div></li><li><b>3</b><div><strong>等待提交</strong><span>AI 会完成构建并把结果送来审核</span></div></li></ol>
+          <div className="ai-submit-copy"><p className="eyebrow">AI 部署助手</p><h2>一次粘贴，从安装到提交</h2><p>把右边的完整指令发给正在开发这个项目的 AI。它会安装或更新助手、确认目标作品，并立即完成构建与部署。</p></div>
+          <div className="ai-prompt-card"><span>完整复制给 AI</span><blockquote>{prompt}</blockquote><button type="button" className="button button-coral" onClick={copyPrompt}>复制完整指令给 AI</button>{copyNotice && <p role="status">{copyNotice}</p>}</div>
+          <ol className="ai-submit-steps"><li><b>1</b><div><strong>复制完整指令</strong><span>安装入口和部署要求都在同一段</span></div></li><li><b>2</b><div><strong>粘贴给 AI</strong><span>按提示补充邀请码或作品选择</span></div></li><li><b>3</b><div><strong>等待提交</strong><span>AI 会把当前项目送进老师审核</span></div></li></ol>
         </section>}
     </main>
   </AppShell>;

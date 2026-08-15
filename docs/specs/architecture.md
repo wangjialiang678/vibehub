@@ -433,7 +433,7 @@ vibehub-deploy/
              → Agent 个人 `skills/vibehub-deploy` 目录
 ```
 
-`/install` 的唯一主操作是“复制这段话给 AI”。学员只看到自然语言，不看到或执行 shell、PowerShell、Node 或 npm 命令。提示词要求 AI 只使用当前 VibeHub 公开 origin 下的 `/downloads/vibehub-skill/`，读取 `manifest.json` 和 `install.mjs`，自行识别 macOS/Windows 与当前 Agent，完成安装后询问邀请码，并仅在学员明确要求部署时提交作品。
+`/install` 的唯一主操作是“复制这段话给 AI”。学员只看到自然语言，不看到或执行 shell、PowerShell、Node 或 npm 命令。提示词要求 AI 只使用当前 VibeHub 公开 origin 下的 `/downloads/vibehub-skill/`，读取 `manifest.json` 和 `install.mjs`，自行识别 macOS/Windows 与当前 Agent，完成安装或更新后在需要时询问邀请码，并继续识别、创建或连接当前目录的作品后立即提交，不再等待第二句部署指令。
 
 `web` 的开发、测试和构建前步骤会调用分发生成器，只复制固定白名单中的运行文件，并生成 `manifest.json`。下载引导程序拒绝跳转、非 HTTPS 生产来源、未知或重复路径、超限内容以及哈希不符的文件；全部文件验证后才用 Node 调用现有 `bin/install.mjs`，并总是清理下载暂存目录。技术标识为 `vibehub-deploy`，展示名为 **VibeHub Deploy**；官网分发 URL 继续保留旧路径 `/downloads/vibehub-skill/`，避免已分发的链接失效。
 
@@ -465,18 +465,21 @@ vibehub-deploy/
 | `vibehub bind <邀请码>` | 绑定身份与项目 |
 | `vibehub camps` | 列出已经连接的营地与唯一连接标识 |
 | `vibehub use <连接标识>` | 切换接下来查询、预览和部署所使用的营地/作品 |
+| `vibehub project create --title "作品名" [目录]` | 在当前学生/营地名下创建独立作品并绑定目录；项目总数不设累计上限 |
+| `vibehub project link <完整连接标识> [目录]` | 把已有作品连接绑定到指定源码目录，不向服务端自报项目权限 |
 | `vibehub status` | 当前版本 / 审核状态 / 无凭证预览定位地址 / 诊断摘要；不签发或打印 claim |
-| `vibehub deploy [--summary "..."]` | 打包 → 提交 → 显示无凭证预览定位地址；不打印返回体中的 claim |
+| `vibehub deploy [目录] [--summary "..."]` | 先按目录锁定作品连接，再打包 → 提交 → 显示无凭证预览定位地址；不打印返回体中的 claim |
 | `vibehub open` | 为待审版本换取短期 claim 并直接交给浏览器；终端不回显 claim。无待审版时打开正式作品 |
 | `vibehub logs` | 最近几次提交与审核反馈（含驳回原因） |
 
 ### 6.4 凭证设计
 
 - **不透明随机串，不用 JWT** —— 必须支持即时吊销（老师撤销邀请码 → token 立刻失效）
-- 存 DB：`token_hash`（只存哈希）、`scope{camp_id, project_id, role}`、`device_name`、`last_used_at`、`expires_at`
+- 存 DB：`token_hash`（只存哈希）、`scope{camp_id, project_id, role}`、`device_name`、`derived_from_token_id`、`last_used_at`、`expires_at`
 - **服务端一切鉴权只认 token 里的 scope**，绝不接受客户端自报的 camp/project 参数（超脑上传平台 ADR-002 的血泪教训）
-- 本地存 `~/.vibehub/credentials.json`。一个文件保存多个营地连接和当前连接；macOS/Linux 使用 0600，Windows 依赖用户目录 ACL
-- 邀请码撤销 → 级联吊销该码签发的全部 token
+- 本地 token 只存 `~/.vibehub/credentials.json`。一个文件保存多个营地/作品连接、当前连接与本机绑定路径；macOS/Linux 使用 0600，Windows 依赖用户目录 ACL。项目目录的 `.vibehub/project.json` 只含不可授权的连接标识，打包时排除
+- 邀请码直接签发的是设备根 token；学生自助创建项目得到项目级派生 token。设备数只统计根 token，项目数不占设备名额；邀请码撤销仍按原码级联吊销全部根与派生 token
+- deploy 必须在构建和网络请求前解析目录绑定。绑定损坏、缺 credential 或多连接歧义时立即停止，绝不回退全局 active
 
 ---
 
@@ -541,10 +544,7 @@ P0 需要的 Block：项目概览 / AI 产品诊断 / 版本对照 / 部署状�
 
 ### 7.5 老师向学员分发说明
 
-老师登录管理端的邀请码页后，始终能看到两条可复制的学员路径：
-
-- 网页登录：打开 `/login`，输入个人邀请码，再上传 HTML、ZIP 或网页文件夹。
-- AI 部署：打开 `/install`，复制页面上唯一的自然语言给 AI，由 AI 安装 VibeHub Deploy、询问个人邀请码，并在学员说“部署我的游戏”后提交。
+老师登录管理端的邀请码页后，始终能看到一段可复制的完整学员说明：AI 提交为推荐路径，AI 安装或更新 VibeHub Deploy、必要时询问个人邀请码、识别新作品或已有作品并立即提交；同一段末尾提供 `/login` 网页上传备用入口，不再让老师或学生复制两段互相独立的内容。
 
 通用说明使用 `CAMP-XXXX` 占位符，不写死城市、营地或生产域名，也不提内部镜像。新生成学员邀请码后，每份转发文案只替换为对应学员的一个明码；刷新后不从脱敏历史恢复。生成老师角色邀请码时，生成结果只提供原始邀请码/导出操作，不生成绑定该码的学员转发文案；上方通用指南仍然可见。复制成功或失败都通过可访问的状态提示反馈，邀请码不写入日志或持久化的前端状态。
 
