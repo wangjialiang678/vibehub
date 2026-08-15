@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { resolve, join, normalize } from 'node:path';
 import { db, now } from './lib/db.js';
 import { PORT, HOST, LIMITS, paths, CONSOLE_ORIGIN, WORKS_PREFIX, DATA_DIR, previewOrigin } from './lib/config.js';
-import { authRequired, assertProjectAccess, hasAllowedCookieOrigin, revokeToken } from './lib/auth.js';
+import { authRequired, assertProjectAccess, hasAllowedCookieOrigin, revokeToken, webSessionCookieOptions } from './lib/auth.js';
 import skillRoutes from './routes/skill.js';
 import submissionRoutes from './routes/submissions.js';
 import adminRoutes from './routes/admin.js';
@@ -150,7 +150,7 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
       const [errorCode, status, message, hint] = data.error;
       return reply.code(status).send({ error: { code: errorCode, message, hint } });
     }
-    reply.setCookie('vh_session', data.token, { path: '/', httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production' });
+    reply.setCookie('vh_session', data.token, webSessionCookieOptions());
     return { user: data.user, camp: data.camp, project: data.project, role: data.role };
   });
 

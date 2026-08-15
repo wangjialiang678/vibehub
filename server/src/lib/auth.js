@@ -5,6 +5,21 @@ import { CONSOLE_ORIGIN } from './config.js';
 
 const hash = (t) => createHash('sha256').update(t).digest('hex');
 
+// Chromium caps persistent cookies at 400 days. Refreshing this lifetime after
+// every successful cookie-authenticated request keeps active devices signed in
+// until explicit logout, browser-data removal, or server-side revocation.
+export const WEB_SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+
+export function webSessionCookieOptions() {
+  return {
+    path: '/',
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: WEB_SESSION_MAX_AGE_SECONDS,
+  };
+}
+
 /**
  * 凭证是不透明随机串，不是 JWT——必须支持即时吊销
  * （老师撤销邀请码 → 该码签发的所有 token 立刻失效）。
@@ -93,6 +108,15 @@ export function authRequired(roles = null) {
     if (roles && !roles.includes(tok.role)) {
       // 越权一律 404，不告诉对方「存在但你无权」
       return reply.code(404).send({ error: { code: 'not_found', message: '找不到这个内容。' } });
+    }
+    if (credentialSource === 'cookie' && tok.kind === 'web') {
+      // Upgrade still-valid legacy 12-hour sessions in place. Expired or
+      // revoked tokens returned above and can never reach this renewal path.
+      if (tok.expires_at) {
+        db.prepare(`UPDATE tokens SET expires_at=NULL WHERE id=? AND kind='web' AND revoked_at IS NULL`)
+          .run(tok.id);
+      }
+      reply.setCookie('vh_session', raw, webSessionCookieOptions());
     }
     req.auth = tok;
     req.authSource = credentialSource;

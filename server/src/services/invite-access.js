@@ -122,7 +122,6 @@ export function bindInvite(code, { kind, deviceName, realName: rawRealName, disp
     const token = issueToken({
       kind, userId: user.id, campId: camp.id, projectId: project?.id,
       role: invite.role, inviteCode: invite.code, deviceName,
-      expiresAt: kind === 'web' ? new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString() : null,
     });
     db.exec('COMMIT');
     return {
