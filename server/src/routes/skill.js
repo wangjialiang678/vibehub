@@ -9,6 +9,7 @@ import { projectSnapshot } from './_shared.js';
 import { browserSubmissionGuard } from '../services/submission-guard.js';
 import {
   findActiveDuplicateVersion,
+  submissionMetadataDiffers,
   SubmissionError,
   submitVersion,
   validateSubmissionMeta,
@@ -158,12 +159,18 @@ export default async function skillRoutes(app, {
   });
 
   // ── 预检：内容没变就别重复上传 ────────────────────────────────────
-  app.post('/api/skill/versions/preflight', { preHandler: authRequired() }, async (req) => {
-    const { sha256 } = req.body || {};
-    const dup = findActiveDuplicateVersion(req.auth.project_id, sha256);
-    return dup
-      ? { duplicate: true, version_id: dup.id, message: `内容和 ${dup.label} 完全一样，没有需要提交的改动。` }
-      : { duplicate: false };
+  app.post('/api/skill/versions/preflight', { preHandler: authRequired() }, async (req, reply) => {
+    const { sha256, project_title, tagline } = req.body || {};
+    try {
+      const normalizedMeta = validateSubmissionMeta({ project_title, tagline });
+      const dup = findActiveDuplicateVersion(req.auth.project_id, sha256);
+      return dup && !submissionMetadataDiffers(req.auth.project_id, dup, normalizedMeta)
+        ? { duplicate: true, version_id: dup.id, message: `内容和 ${dup.label} 完全一样，没有需要提交的改动。` }
+        : { duplicate: false };
+    } catch (error) {
+      if (error instanceof SubmissionError) return err(reply, error.code, error.status, error.message, error.hint);
+      throw error;
+    }
   });
 
   // ── 提交版本 ─────────────────────────────────────────────────────

@@ -23,6 +23,8 @@ type SubmissionUpdate = Partial<Omit<SubmissionUiState, 'hasFiles'>>;
 interface SubmissionInput {
   projectId: string;
   files: File[];
+  projectTitle?: string;
+  tagline?: string;
   summary: string;
   flowsText: string;
 }
@@ -54,6 +56,8 @@ export async function executeSubmission(input: SubmissionInput, dependencies: Su
     const bundle = await dependencies.prepare(input.files);
     update({ stage: 'uploading' });
     const response = await dependencies.submit(input.projectId, bundle, {
+      project_title: input.projectTitle?.trim() || undefined,
+      tagline: input.tagline?.trim() || undefined,
       summary: input.summary.trim() || undefined,
       flows: flows.length ? flows : undefined,
     }, (progress) => update({ stage: progress >= 100 ? 'checking' : 'uploading', progress }));
@@ -134,6 +138,8 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, publi
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<SubmissionMode>(initialMode);
   const [files, setFiles] = useState<File[]>([]);
+  const [projectTitle, setProjectTitle] = useState('');
+  const [tagline, setTagline] = useState('');
   const [summary, setSummary] = useState('');
   const [flowsText, setFlowsText] = useState('');
   const [submission, setSubmission] = useState<SubmissionUiState>(initialSubmissionState || { stage: 'idle', progress: 0, error: null, result: null });
@@ -157,7 +163,7 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, publi
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!files.length || busy) return;
-    await executeSubmission({ projectId, files, summary, flowsText }, {
+    await executeSubmission({ projectId, files, projectTitle, tagline, summary, flowsText }, {
       prepare: prepareSubmissionFiles,
       submit: api.submitProjectVersion,
       invalidate: (queryKey) => queryClient.invalidateQueries({ queryKey }),
@@ -196,6 +202,10 @@ export function SubmitWorkspace({ projectId, campName, campSlug, userName, publi
               <div><strong>{files.length ? (files.length === 1 ? files[0].name : `已选择 ${files.length} 个文件`) : '还没有选择文件'}</strong><small>{files.length ? '可以继续填写这次更新的说明' : '文件最大 30 MB；单个 HTML 最大 20 MB'}</small></div>
             </div>
 
+            <div className="submit-form-grid submit-project-meta">
+              <label className="field-label"><span>作品名称 <small>{projectTitle.length}/80</small></span><input value={projectTitle} maxLength={80} placeholder="例如：极速分裂" onChange={(event) => setProjectTitle(event.target.value)} /></label>
+              <label className="field-label"><span>一句话介绍 <small>{tagline.length}/160</small></span><input value={tagline} maxLength={160} placeholder="例如：双人分屏的极速竞速游戏。" onChange={(event) => setTagline(event.target.value)} /></label>
+            </div>
             <div className="submit-form-grid">
               <label className="field-label"><span>这次更新了什么 <small>{summary.length}/500</small></span><textarea value={summary} maxLength={500} rows={5} placeholder="例如：完成了开始界面，修复角色碰撞，并补上结算页。" onChange={(event) => setSummary(event.target.value)} /></label>
               <label className="field-label"><span>希望老师检查的流程 <small>{flows.length}/5</small></span><textarea value={flowsText} rows={5} placeholder={'每行一条，例如：\n开始游戏\n完成第一关\n查看结算'} onChange={(event) => setFlowsText(event.target.value)} /><small className="field-help">可用换行或逗号分隔，最多取前 5 条。</small></label>

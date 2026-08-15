@@ -26,7 +26,10 @@ export default async function publicRoutes(app) {
     const rows = db.prepare(`
       SELECT p.id,p.slug,p.title,p.tagline,p.category,p.cover_url,p.visibility,p.updated_at,
              p.collection_order,p.collection_recommended,
-             u.username,u.display_name,u.real_name,u.avatar_url,
+             u.username,
+             COALESCE((SELECT cr.display_name FROM camp_roster cr WHERE cr.user_id=u.id AND cr.camp_id=p.camp_id LIMIT 1),u.display_name) AS display_name,
+             COALESCE((SELECT cr.real_name FROM camp_roster cr WHERE cr.user_id=u.id AND cr.camp_id=p.camp_id LIMIT 1),u.real_name) AS real_name,
+             u.avatar_url,
              v.label
       FROM projects p
       JOIN users u ON u.id=p.owner_user_id
@@ -70,7 +73,10 @@ export default async function publicRoutes(app) {
   app.get('/api/public/projects/:slug', async (req, reply) => {
     const row = db.prepare(`
       SELECT p.id,p.slug,p.title,p.tagline,p.category,p.cover_url,p.visibility,p.updated_at,
-             u.username,u.display_name,u.real_name,u.avatar_url,
+             u.username,
+             COALESCE((SELECT cr.display_name FROM camp_roster cr WHERE cr.user_id=u.id AND cr.camp_id=p.camp_id LIMIT 1),u.display_name) AS display_name,
+             COALESCE((SELECT cr.real_name FROM camp_roster cr WHERE cr.user_id=u.id AND cr.camp_id=p.camp_id LIMIT 1),u.real_name) AS real_name,
+             u.avatar_url,
              c.id AS camp_id,c.slug AS camp_slug,c.name AS camp_name,c.visibility_default,
              v.label
       FROM projects p

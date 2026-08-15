@@ -21,6 +21,8 @@ export interface SubmissionMeta {
   summary?: string;
   flows?: string[];
   label?: string;
+  project_title?: string;
+  tagline?: string;
 }
 
 export interface SubmissionResponse {

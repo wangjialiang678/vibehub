@@ -253,11 +253,13 @@ export default async function adminRoutes(app) {
 
     const p = db.prepare('SELECT * FROM projects WHERE id=?').get(r.project_id);
     const u = db.prepare('SELECT * FROM users WHERE id=?').get(p.owner_user_id);
+    const v = db.prepare('SELECT project_title,tagline FROM versions WHERE id=?').get(r.version_id);
     publishVersion({ username: u.username, slug: p.slug, versionId: r.version_id });
 
     db.prepare(`UPDATE projects SET live_version_id=?, pending_version_id=NULL,
+                title=COALESCE(?,title), tagline=COALESCE(?,tagline),
                 publish_status='published', dev_status='developing', updated_at=? WHERE id=?`)
-      .run(r.version_id, now(), p.id);
+      .run(r.version_id, v?.project_title ?? null, v?.tagline ?? null, now(), p.id);
     db.prepare(`INSERT INTO deployments (id,version_id,target,status,url,started_at,finished_at)
                 VALUES (?,?,?,?,?,?,?)`)
       .run('dp_' + nanoid(10), r.version_id, 'live', 'ready', null, now(), now());

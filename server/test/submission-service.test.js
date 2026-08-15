@@ -134,8 +134,8 @@ after(async () => {
 test('提交元数据规范化缺省值并修剪玩法两端空白', () => {
   assert.deepEqual(validateSubmissionMeta(), { summary: '', flows: [] });
   assert.deepEqual(
-    validateSubmissionMeta({ summary: ' 新关卡 ', flows: ['  开始游戏  ', '   '], label: ' v2.0.0 ' }),
-    { summary: '新关卡', flows: ['开始游戏'], label: 'v2.0.0' },
+    validateSubmissionMeta({ summary: ' 新关卡 ', flows: ['  开始游戏  ', '   '], label: ' v2.0.0 ', project_title: ' 极速赛车 ', tagline: ' 双人分屏竞速。 ' }),
+    { summary: '新关卡', flows: ['开始游戏'], label: 'v2.0.0', project_title: '极速赛车', tagline: '双人分屏竞速。' },
   );
 });
 
@@ -149,6 +149,10 @@ test('提交元数据拒绝错误类型、数量和原始超长字符串', () =>
     { flows: [` ${'x'.repeat(80)} `] },
     { label: 42 },
     { label: 'x'.repeat(81) },
+    { project_title: 42 },
+    { project_title: 'x'.repeat(81) },
+    { tagline: 42 },
+    { tagline: 'x'.repeat(161) },
   ];
   for (const meta of invalid) {
     assert.throws(
@@ -156,6 +160,40 @@ test('提交元数据拒绝错误类型、数量和原始超长字符串', () =>
       (error) => error instanceof SubmissionError && error.code === 'invalid_meta' && error.status === 400 && /最多|必须/.test(error.message),
     );
   }
+});
+
+test('提交可更新作品名称和简介，默认标题可从网页 title 补齐', async () => {
+  const explicit = fixture();
+  db.prepare(`UPDATE projects SET title='我的作品' WHERE id=?`).run(explicit.projectId);
+  await submit(explicit, {
+    content: '<!doctype html><title>旧网页标题</title><main>可提交的完整作品</main>',
+    meta: { project_title: '极速分裂', tagline: '双人分屏竞速游戏。' },
+  });
+  const explicitProject = db.prepare('SELECT title,tagline FROM projects WHERE id=?').get(explicit.projectId);
+  assert.equal(explicitProject.title, '我的作品', '待审元数据不能提前出现在公开项目上');
+  assert.equal(explicitProject.tagline, null);
+  const explicitVersion = db.prepare('SELECT project_title,tagline FROM versions WHERE project_id=?').get(explicit.projectId);
+  assert.equal(explicitVersion.project_title, '极速分裂');
+  assert.equal(explicitVersion.tagline, '双人分屏竞速游戏。');
+
+  const inferred = fixture();
+  db.prepare(`UPDATE projects SET title='我的作品' WHERE id=?`).run(inferred.projectId);
+  await submit(inferred, { content: '<!doctype html><html><head><title>  蛇蛇大作战 &amp; 好友赛  </title></head><body>完整作品</body></html>' });
+  assert.equal(db.prepare('SELECT title FROM projects WHERE id=?').get(inferred.projectId).title, '我的作品');
+  assert.equal(db.prepare('SELECT project_title FROM versions WHERE project_id=?').get(inferred.projectId).project_title, '蛇蛇大作战 & 好友赛');
+});
+
+test('作品包相同但名称或简介有变化时仍允许提交待审版本', async () => {
+  const f = fixture();
+  const first = await submit(f, { meta: { project_title: '旧名称', tagline: '旧介绍' } });
+  const old = db.prepare('SELECT bundle_sha FROM versions WHERE id=?').get(first.result.version_id);
+  assert.ok(findActiveDuplicateVersion(f.projectId, old.bundle_sha));
+
+  const second = await submit(f, { meta: { project_title: '新名称', tagline: '新介绍' } });
+  assert.notEqual(second.result.version_id, first.result.version_id);
+  const proposed = db.prepare('SELECT project_title,tagline FROM versions WHERE id=?').get(second.result.version_id);
+  assert.equal(proposed.project_title, '新名称');
+  assert.equal(proposed.tagline, '新介绍');
 });
 
 test('共享服务记录来源与规范化后的元数据并清理 source 和 staging', async () => {
@@ -195,7 +233,9 @@ test('同步密钥扫描拒绝提交、记录诊断并删除产物和临时文�
   await assert.rejects(
     submitVersion({
       projectId: f.projectId, userId: f.userId, auth: f.auth,
-      source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: f.diagnosisQueue,
+      source: upload.source, filename: '作品.html',
+      meta: { project_title: '不应公开的标题', tagline: '不应公开的介绍' },
+      submittedVia: 'skill', diagnosisQueue: f.diagnosisQueue,
     }),
     (error) => error instanceof SubmissionError && error.code === 'secret_detected' && error.status === 422,
   );
@@ -208,6 +248,9 @@ test('同步密钥扫描拒绝提交、记录诊断并删除产物和临时文�
   assert.equal(db.prepare('SELECT status FROM diagnoses WHERE version_id=?').get(row.id).status, 'blocked');
   assert.equal(db.prepare('SELECT pending_version_id FROM projects WHERE id=?').get(f.projectId).pending_version_id, null);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deployments WHERE version_id=?').get(row.id).n, 0);
+  const project = db.prepare('SELECT title,tagline FROM projects WHERE id=?').get(f.projectId);
+  assert.equal(project.title, '测试作品');
+  assert.equal(project.tagline, null);
 });
 
 test('含密钥的新提交不会撤销或清理此前仍有效的待审版本', async () => {
@@ -246,7 +289,7 @@ test('诊断入队失败会恢复旧 pending 并清除新版本的数据库和�
   await assert.rejects(
     submitVersion({
       projectId: f.projectId, userId: f.userId, auth: f.auth,
-      source: upload.source, filename: '作品.html', meta: {}, submittedVia: 'skill', diagnosisQueue: failingQueue,
+      source: upload.source, filename: '作品.html', meta: { project_title: '不应保留的新标题', tagline: '不应保留的新简介' }, submittedVia: 'skill', diagnosisQueue: failingQueue,
     }),
     (error) => error instanceof SubmissionError && error.status === 500,
   );
@@ -257,6 +300,9 @@ test('诊断入队失败会恢复旧 pending 并清除新版本的数据库和�
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM deployments WHERE version_id!=?').get(oldVersionId).n, 0);
   assert.deepEqual(readdirSync(paths.versions), [oldVersionId]);
   assert.equal(existsSync(upload.source), false);
+  const restoredProject = db.prepare('SELECT title,tagline FROM projects WHERE id=?').get(f.projectId);
+  assert.equal(restoredProject.title, '测试作品');
+  assert.equal(restoredProject.tagline, null);
 });
 
 test('提交状态切换前先持久化 running 诊断，进程中断后启动恢复继续诊断并进入审核', async () => {
@@ -682,6 +728,12 @@ test('preflight 不让历史记录挡提交，但识别当前完整版本', asyn
   assert.equal(active.statusCode, 200);
   assert.equal(active.json().duplicate, true);
   assert.equal(active.json().version_id, result.version_id);
+  const metadataChange = await app.inject({
+    method: 'POST', url: '/api/skill/versions/preflight', headers,
+    payload: { sha256: row.bundle_sha, project_title: '只改作品名称' },
+  });
+  assert.equal(metadataChange.statusCode, 200);
+  assert.equal(metadataChange.json().duplicate, false);
 
   db.prepare('UPDATE projects SET pending_version_id=NULL WHERE id=?').run(f.projectId);
   pruneProjectArtifacts(f.projectId);

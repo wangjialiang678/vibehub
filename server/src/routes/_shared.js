@@ -10,6 +10,7 @@ export function versionView(v) {
   const dep = db.prepare(`SELECT * FROM deployments WHERE version_id=? AND target='preview' ORDER BY started_at DESC LIMIT 1`).get(v.id);
   return {
     id: v.id, label: v.label, seq: v.seq, summary: v.summary,
+    project_title: v.project_title, tagline: v.tagline,
     flows: j(v.flows, []), rewrites: j(v.rewrites, []),
     file_count: v.file_count, bundle_size: v.bundle_size,
     submitted_at: v.submitted_at,
@@ -60,6 +61,8 @@ export function projectSnapshot(projectId) {
   const p = db.prepare('SELECT * FROM projects WHERE id=?').get(projectId);
   if (!p) return null;
   const owner = db.prepare('SELECT * FROM users WHERE id=?').get(p.owner_user_id);
+  const ownerProfile = db.prepare(`SELECT display_name FROM camp_roster WHERE camp_id=? AND user_id=? LIMIT 1`)
+    .get(p.camp_id, p.owner_user_id);
   const camp = db.prepare('SELECT * FROM camps WHERE id=?').get(p.camp_id);
   const live = p.live_version_id ? db.prepare('SELECT * FROM versions WHERE id=?').get(p.live_version_id) : null;
   const pending = p.pending_version_id ? db.prepare('SELECT * FROM versions WHERE id=?').get(p.pending_version_id) : null;
@@ -85,7 +88,7 @@ export function projectSnapshot(projectId) {
       live_url: p.live_version_id ? worksUrl(owner.username, p.slug) : null,
       updated_at: p.updated_at,
     },
-    owner: { id: owner.id, username: owner.username, display_name: owner.display_name },
+    owner: { id: owner.id, username: owner.username, display_name: ownerProfile?.display_name || owner.display_name },
     camp: { id: camp.id, slug: camp.slug, name: camp.name, kind: camp.kind },
     live_version: versionView(live),
     pending_version: versionView(pending),

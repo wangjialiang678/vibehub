@@ -129,6 +129,58 @@ test('deploy 在异步诊断未就绪时提示稍后查看状态而不输出 und
   }
 });
 
+test('deploy 把 AI 判断的作品名称和简介作为结构化元数据提交', async () => {
+  let receivedMeta = null;
+  let receivedPreflight = null;
+  const server = createServer((req, res) => {
+    if (req.url === '/api/skill/versions/preflight') {
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        receivedPreflight = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ duplicate: false }));
+      });
+      return;
+    }
+    if (req.url === '/api/skill/versions') {
+      const chunks = [];
+      req.on('data', (chunk) => chunks.push(chunk));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        const match = /name="meta"\r\n\r\n([^\r]+)\r\n--/.exec(body);
+        receivedMeta = match ? JSON.parse(match[1]) : null;
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ label: 'v0.1.0', preview_url: 'http://works.test/vibehub/_preview/demo/', diagnosis: { status: 'running' } }));
+      });
+      return;
+    }
+    req.resume();
+    res.writeHead(404).end();
+  });
+  const api = await listen(server);
+  const home = tempDir('vh-cli-meta-home-');
+  const project = tempDir('vh-cli-meta-project-');
+  mkdirSync(join(home, '.vibehub'));
+  writeFileSync(join(home, '.vibehub', 'credentials.json'), JSON.stringify({ token: 'test-token', api }));
+  writeFileSync(join(project, 'index.html'), '<title>极速分裂</title><main>测试作品</main>');
+
+  try {
+    const result = await run(process.execPath, [resolve('..', 'skill', 'bin', 'vibehub'), 'deploy', project,
+      '--title', '极速分裂', '--tagline', '双人分屏竞速游戏。', '--summary', '完成第一版'], {
+      cwd: resolve('..'), env: { ...process.env, HOME: home, VIBEHUB_API: api },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(receivedMeta, {
+      label: null, summary: '完成第一版', flows: [], project_title: '极速分裂', tagline: '双人分屏竞速游戏。',
+    });
+    assert.equal(receivedPreflight.project_title, '极速分裂');
+    assert.equal(receivedPreflight.tagline, '双人分屏竞速游戏。');
+  } finally {
+    await new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+  }
+});
+
 test('deploy 的打包产物不会包含敏感文件或密钥目录', async () => {
   let receivedBundle = null;
   const server = createServer((req, res) => {

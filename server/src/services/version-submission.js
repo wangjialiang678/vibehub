@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid';
-import { existsSync, mkdirSync, renameSync, rmSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { db, now } from '../lib/db.js';
 import { paths, previewUrl, worksPath } from '../lib/config.js';
@@ -35,6 +35,10 @@ export function validateSubmissionMeta(input = {}) {
   const flows = input.flows == null ? [] : input.flows;
   const hasLabel = input.label != null;
   const label = hasLabel ? input.label : undefined;
+  const hasProjectTitle = input.project_title != null;
+  const projectTitle = hasProjectTitle ? input.project_title : undefined;
+  const hasTagline = input.tagline != null;
+  const tagline = hasTagline ? input.tagline : undefined;
 
   if (typeof summary !== 'string') invalidMeta('更新说明必须是字符串，最多 500 字。');
   if (summary.length > 500) invalidMeta('更新说明最多 500 字。');
@@ -45,13 +49,42 @@ export function validateSubmissionMeta(input = {}) {
   if (flows.some((item) => item.length > 80)) invalidMeta('每条核心玩法最多 80 字。');
   if (hasLabel && typeof label !== 'string') invalidMeta('版本标签必须是字符串，最多 80 字。');
   if (hasLabel && label.length > 80) invalidMeta('版本标签最多 80 字。');
+  if (hasProjectTitle && typeof projectTitle !== 'string') invalidMeta('作品名称必须是字符串，最多 80 字。');
+  if (hasProjectTitle && projectTitle.length > 80) invalidMeta('作品名称最多 80 字。');
+  if (hasTagline && typeof tagline !== 'string') invalidMeta('作品简介必须是字符串，最多 160 字。');
+  if (hasTagline && tagline.length > 160) invalidMeta('作品简介最多 160 字。');
 
   const normalized = {
     summary: summary.trim(),
     flows: flows.map((item) => item.trim()).filter(Boolean),
   };
   if (hasLabel) normalized.label = label.trim();
+  if (hasProjectTitle && projectTitle.trim()) normalized.project_title = projectTitle.trim();
+  if (hasTagline && tagline.trim()) normalized.tagline = tagline.trim();
   return normalized;
+}
+
+function decodeHtmlEntities(value) {
+  const named = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+  return value.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (match, entity) => {
+    if (entity[0] !== '#') return named[entity.toLowerCase()] ?? match;
+    const codePoint = entity[1].toLowerCase() === 'x'
+      ? Number.parseInt(entity.slice(2), 16)
+      : Number.parseInt(entity.slice(1), 10);
+    try { return String.fromCodePoint(codePoint); } catch { return match; }
+  });
+}
+
+export function extractDocumentTitle(indexPath) {
+  try {
+    const html = readFileSync(indexPath, 'utf8').slice(0, 1024 * 1024);
+    const match = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+    if (!match) return null;
+    const title = decodeHtmlEntities(match[1].replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+    return title ? title.slice(0, 80) : null;
+  } catch {
+    return null;
+  }
 }
 
 function latestReviewStatus(versionId) {
@@ -74,6 +107,17 @@ export function findActiveDuplicateVersion(projectId, sha256) {
     if (version.id === project.live_version_id && (status === null || status === 'approved')) return version;
   }
   return null;
+}
+
+export function submissionMetadataDiffers(projectId, version, normalizedMeta = {}) {
+  const project = db.prepare('SELECT title,tagline FROM projects WHERE id=?').get(projectId);
+  if (!project || !version) return false;
+  const currentTitle = version.project_title || project.title;
+  const currentTagline = version.tagline || project.tagline || null;
+  return Boolean(
+    (normalizedMeta.project_title && normalizedMeta.project_title !== currentTitle)
+    || (normalizedMeta.tagline && normalizedMeta.tagline !== currentTagline),
+  );
 }
 
 function mappedSubmissionError(error) {
@@ -171,12 +215,15 @@ export async function submitVersion({
         '确认打包的是网页目录；如果用了构建工具，先 build 再提交',
       );
     }
+    const inferredTitle = project.title === '我的作品' ? extractDocumentTitle(join(staging, 'index.html')) : null;
+    const nextTitle = normalizedMeta.project_title || inferredTitle || project.title;
+    const nextTagline = normalizedMeta.tagline || project.tagline;
 
     // 新提交替换旧待审产物，因此额度按最终保留集合预估。
     assertProjectedQuota(projectId, totalBytes);
     const sha = sha256File(source);
     const duplicate = findActiveDuplicateVersion(projectId, sha);
-    if (duplicate) {
+    if (duplicate && !submissionMetadataDiffers(projectId, duplicate, normalizedMeta)) {
       throw new SubmissionError(
         'duplicate_version',
         `内容和 ${duplicate.label} 完全一样，没有需要提交的改动。`,
@@ -196,9 +243,9 @@ export async function submitVersion({
     finalized = true;
 
     db.prepare(`INSERT INTO versions
-      (id,project_id,label,seq,summary,flows,bundle_sha,bundle_size,file_count,rewrites,rejected,preview_id,submitted_by,submitted_via,submitted_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(vid, projectId, label, seq, normalizedMeta.summary,
+      (id,project_id,label,seq,summary,project_title,tagline,flows,bundle_sha,bundle_size,file_count,rewrites,rejected,preview_id,submitted_by,submitted_via,submitted_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(vid, projectId, label, seq, normalizedMeta.summary, nextTitle, nextTagline,
         JSON.stringify(normalizedMeta.flows), sha, totalBytes, fileCount,
         JSON.stringify(rewrites.slice(0, 50)), JSON.stringify(rejected.slice(0, 50)), previewId, userId, submittedVia, now());
     persisted = true;

@@ -70,6 +70,10 @@ describe('学员提交作品页', () => {
     expect(idle).toContain('accept=".html,.htm,.zip,.tar.gz,.tgz"');
     expect(idle).toContain('选择网页文件夹');
     expect(idle).toContain('maxLength="500"');
+    expect(idle).toContain('作品名称');
+    expect(idle).toContain('maxLength="80"');
+    expect(idle).toContain('一句话介绍');
+    expect(idle).toContain('maxLength="160"');
     expect(idle).toMatch(/<label[^>]*>[^<]*<span[^>]*>↥<\/span><strong>选择文件<\/strong>/);
 
     const busy = renderWorkspace({ stage: 'uploading', progress: 40, error: null, result: null, hasFiles: true }, 'web');
@@ -120,13 +124,15 @@ describe('学员提交作品页', () => {
 
   it('成功后刷新项目和版本，并且可见预览文本不含 claim', async () => {
     const invalidate = vi.fn(async () => undefined);
+    const submit = vi.fn(async (_projectId, _bundle, _meta, onProgress) => { onProgress(100); return response; });
     let state: SubmissionUiState = { stage: 'idle', progress: 0, error: null, result: null };
-    await executeSubmission({ projectId: 'project-1', files: [new File(['game'], 'index.html')], summary: '更新', flowsText: '开始游戏' }, {
+    await executeSubmission({ projectId: 'project-1', files: [new File(['game'], 'index.html')], projectTitle: ' 极速分裂 ', tagline: ' 双人分屏竞速。 ', summary: '更新', flowsText: '开始游戏' }, {
       prepare: vi.fn(async (files: File[]) => files[0]),
-      submit: vi.fn(async (_projectId, _bundle, _meta, onProgress) => { onProgress(100); return response; }),
+      submit,
       invalidate,
     }, (update) => { state = { ...state, ...update }; });
 
+    expect(submit.mock.calls[0]?.[2]).toMatchObject({ project_title: '极速分裂', tagline: '双人分屏竞速。' });
     expect(invalidate).toHaveBeenCalledWith(['project', 'project-1']);
     expect(invalidate).toHaveBeenCalledWith(['versions', 'project-1']);
     const success = renderWorkspace({ ...state, hasFiles: true }, 'web');

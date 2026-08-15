@@ -893,15 +893,20 @@ test('BaaS 的记录字节、集合和 counter key 都有项目级配额', async
   assert.equal(counterQuota.json().error.code, 'counter_key_quota_exceeded');
 });
 
-test('重复 approve 返回 409，且不二次发布', async () => {
+test('approve 才把版本提议的作品名称和简介公开，重复点击不会二次发布', async () => {
   const camp = createCamp();
   const { teacher, token } = teacherToken(camp.id);
   const owner = createUser(camp.id);
   const project = createProject(camp.id, owner.id);
   const version = addVersion(project.id, owner.id, 1);
+  db.prepare('UPDATE versions SET project_title=?,tagline=? WHERE id=?')
+    .run('审核后的名称', '审核后的简介', version.id);
   const reviewId = addReview({ versionId: version.id, projectId: project.id, campId: camp.id });
   const first = await app.inject({ method: 'POST', url: `/api/reviews/${reviewId}/approve`, headers: { authorization: `Bearer ${token}` } });
   assert.equal(first.statusCode, 200);
+  const publishedProject = db.prepare('SELECT title,tagline FROM projects WHERE id=?').get(project.id);
+  assert.equal(publishedProject.title, '审核后的名称');
+  assert.equal(publishedProject.tagline, '审核后的简介');
   const duplicate = await app.inject({ method: 'POST', url: `/api/reviews/${reviewId}/approve`, headers: { authorization: `Bearer ${token}` } });
   assert.equal(duplicate.statusCode, 409);
   assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM deployments WHERE version_id=? AND target='live'`).get(version.id).n, 1);
@@ -1278,6 +1283,39 @@ test('公开端白名单不泄露真实姓名、诊断、审核或邀请码', as
   assert.ok(!body.includes('内部诊断'));
   assert.ok(!body.includes('review'));
   assert.ok(!body.includes('invite'));
+});
+
+test('营地名单姓名只覆盖当前营地展示，不改全局昵称或泄露到其他营地', async () => {
+  const shenzhen = createCamp();
+  const otherCamp = createCamp();
+  const owner = createUser(shenzhen.id, 'student', { displayName: '全局昵称', realName: '全局姓名' });
+  db.prepare('INSERT INTO camp_members (camp_id,user_id,role,joined_at) VALUES (?,?,?,?)')
+    .run(otherCamp.id, owner.id, 'student', now());
+  db.prepare(`INSERT INTO camp_roster
+    (id,camp_id,real_name,display_name,user_id,source,verification_status,created_at,updated_at)
+    VALUES (?,?,?,?,?,'teacher','verified',?,?)`)
+    .run(nextId('roster'), shenzhen.id, '深圳姓名', '深圳姓名', owner.id, now(), now());
+  db.prepare(`INSERT INTO camp_roster
+    (id,camp_id,real_name,display_name,user_id,source,verification_status,created_at,updated_at)
+    VALUES (?,?,?,?,?,'teacher','verified',?,?)`)
+    .run(nextId('roster'), otherCamp.id, '其他营姓名', '其他营昵称', owner.id, now(), now());
+
+  const shenzhenProject = createProject(shenzhen.id, owner.id, { publishStatus: 'published' });
+  const otherProject = createProject(otherCamp.id, owner.id, { publishStatus: 'published' });
+  const shenzhenVersion = addVersion(shenzhenProject.id, owner.id, 1);
+  const otherVersion = addVersion(otherProject.id, owner.id, 1);
+  db.prepare("UPDATE projects SET live_version_id=?,visibility='nickname' WHERE id=?").run(shenzhenVersion.id, shenzhenProject.id);
+  db.prepare("UPDATE projects SET live_version_id=?,visibility='nickname' WHERE id=?").run(otherVersion.id, otherProject.id);
+
+  const shenzhenPublic = await app.inject({ method: 'GET', url: `/api/public/camps/${shenzhen.slug}` });
+  const otherPublic = await app.inject({ method: 'GET', url: `/api/public/camps/${otherCamp.slug}` });
+  assert.equal(shenzhenPublic.json().items[0].author, '深圳姓名');
+  assert.equal(otherPublic.json().items[0].author, '其他营昵称');
+  assert.equal(db.prepare('SELECT display_name FROM users WHERE id=?').get(owner.id).display_name, '全局昵称');
+
+  const token = issueToken({ kind: 'web', userId: owner.id, campId: shenzhen.id, projectId: shenzhenProject.id, role: 'student' });
+  const me = await app.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${token}` } });
+  assert.equal(me.json().user.display_name, '深圳姓名');
 });
 
 test('公开集合将推荐作品置顶，并且只白名单返回推荐标记', async () => {

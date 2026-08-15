@@ -783,13 +783,20 @@ const cmds = {
   },
 
   async deploy(...args) {
-    let summary = null, flows = [], label = null, dir = process.cwd();
+    let summary = null, flows = [], label = null, projectTitle = null, tagline = null, dir = process.cwd();
     for (let i = 0; i < args.length; i++) {
-      if (args[i] === '--summary') summary = args[++i];
-      else if (args[i] === '--flows') flows = String(args[++i]).split(',').map((s) => s.trim()).filter(Boolean);
-      else if (args[i] === '--label') label = args[++i];
-      else if (!args[i].startsWith('-')) dir = args[i];
-      else die(`不认识参数 ${args[i]}。`, `运行 ${CLI_DISPLAY} help 查看用法`);
+      const valueAfter = (flag) => {
+        const value = args[++i];
+        if (value == null || value.startsWith('--')) die(`${flag} 缺少内容。`, `${flag} 后面需要填写一段文字`);
+        return value;
+      };
+      if (args[i] === '--summary') summary = valueAfter('--summary');
+      else if (args[i] === '--flows') flows = valueAfter('--flows').split(',').map((s) => s.trim()).filter(Boolean);
+      else if (args[i] === '--label') label = valueAfter('--label');
+      else if (args[i] === '--title') projectTitle = valueAfter('--title');
+      else if (args[i] === '--tagline') tagline = valueAfter('--tagline');
+      else if (args[i].startsWith('-')) die(`不认识参数 ${args[i]}。`, `运行 ${CLI_DISPLAY} help 查看支持的参数`);
+      else dir = args[i];
     }
 
     dir = canonicalDirectory(dir);
@@ -809,11 +816,13 @@ const cmds = {
       const sha = createHash('sha256').update(readFileSync(tgz)).digest('hex');
       say(`${c.d}${countFiles(src)} 个文件，${(size / 1024).toFixed(0)} KB${c.x}`);
 
-      const pre = await api('/api/skill/versions/preflight', { method: 'POST', body: { sha256: sha, size }, credential: cred });
+      const pre = await api('/api/skill/versions/preflight', {
+        method: 'POST', body: { sha256: sha, size, project_title: projectTitle, tagline }, credential: cred,
+      });
       if (pre.duplicate) { say(`${c.y}○${c.x} ${pre.message}`); return; }
 
       const fd = new FormData();
-      fd.append('meta', JSON.stringify({ label, summary, flows }));
+      fd.append('meta', JSON.stringify({ label, summary, flows, project_title: projectTitle, tagline }));
       fd.append('bundle', new Blob([readFileSync(tgz)]), 'bundle.tgz');
       const res = await fetch(cred.api + '/api/skill/versions', {
         method: 'POST', headers: { authorization: `Bearer ${cred.token}` }, body: fd,
@@ -876,6 +885,8 @@ ${c.bold}vibehub${c.x} — 把你的作品交给 VibeHub
   ${c.bold}${CLI_DISPLAY} project link <完整连接标识> [目录]${c.x}
                               把目录关联到已有作品
   ${c.bold}${CLI_DISPLAY} deploy${c.x}           打包当前目录并提交
+      --title "作品名称"
+      --tagline "一句话介绍"
       --summary "本次更新说明"
       --flows "上传声音,查看地图"    声明核心操作路径（诊断会用到）
   ${c.bold}${CLI_DISPLAY} status${c.x}           看当前状态与 AI 诊断

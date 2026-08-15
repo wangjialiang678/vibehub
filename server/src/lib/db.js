@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS versions (
   label TEXT NOT NULL,
   seq INTEGER NOT NULL,
   summary TEXT,
+  project_title TEXT,                 -- 本版本提议的作品名称，审核通过后才公开
+  tagline TEXT,                       -- 本版本提议的一句话介绍，审核通过后才公开
   flows TEXT,                         -- JSON 数组：学员声明的核心操作路径
   bundle_sha TEXT NOT NULL,
   bundle_size INTEGER NOT NULL,
@@ -236,6 +238,8 @@ ensureColumn('versions', 'artifact_pruned', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('diagnoses', 'model_items', 'TEXT');
 ensureColumn('diagnoses', 'model_attempted_at', 'TEXT');
 ensureColumn('versions', 'rejected', 'TEXT');
+ensureColumn('versions', 'project_title', 'TEXT');
+ensureColumn('versions', 'tagline', 'TEXT');
 ensureColumn('projects', 'collection_order', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('projects', 'collection_recommended', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('invites', 'roster_entry_id', 'TEXT REFERENCES camp_roster(id)');

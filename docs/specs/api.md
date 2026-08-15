@@ -95,7 +95,8 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 避免重复上传。
 
 ```jsonc
-// →  { "sha256":"...", "size":1048576, "file_count":42 }
+// →  { "sha256":"...", "size":1048576, "file_count":42,
+//       "project_title":"声景地图", "tagline":"用声音探索城市角落。" }
 // ←  { "duplicate":false }
 //    或 { "duplicate":true, "version_id":"v_..", "message":"内容和上一版完全一样，没有需要提交的改动" }
 ```
@@ -104,8 +105,9 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 `multipart/form-data`：`bundle`（tar.gz，≤30 MB）+ `meta`（JSON）
 
 ```jsonc
-// meta
-{ "label":"v1.2.0", "summary":"新增声音上传与地图筛选", "flows":["上传声音","查看地图"] }
+// meta（网页提交接口使用同一结构）
+{ "label":"v1.2.0", "project_title":"声景地图", "tagline":"用声音探索城市角落。",
+  "summary":"新增声音上传与地图筛选", "flows":["上传声音","查看地图"] }
 // ←  201
 { "version_id":"v_..", "seq":7, "preview_url":"https://a1b2c3d4e5f6g7h8.preview.supermind-ai.cn/vibehub/_preview/a1b2c3d4e5f6g7h8/?claim=<短期签名>",
   "preview_expires_at":"2026-08-03T01:20:00.000Z",
@@ -114,6 +116,8 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
   "message":"已生成预览版本，正在做 AI 诊断，随后会自动进入老师的审核队列" }
 ```
 错误：`bundle_too_large` · `bundle_invalid`（解包失败/含危险条目）· `missing_index_html` · `rate_limited`
+
+`project_title` 最多 80 字，`tagline` 最多 160 字，先随待审版本保存，老师审核通过后才同步到公开项目。若项目仍叫“我的作品”且没有传 `project_title`，平台会从 `index.html` 的 `<title>` 补齐。只修改名称或简介时，即使作品包哈希相同也允许提交审核。
 
 ---
 
@@ -126,6 +130,7 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 | `GET` | `/api/me` | 当前身份与所属课程列表 |
 | `GET` | `/api/projects/:id` | 项目全貌（同 skill 的 `/skill/project`，但含更多展示字段） |
 | `GET` | `/api/projects/:id/versions` | 提交记录，分页 |
+| `POST` | `/api/projects/:id/versions` | 浏览器上传 HTML/ZIP/文件夹整理包；元数据同 Skill 提交 |
 | `GET` | `/api/projects/:id/timeline` | 「最近发生了什么」——versions/deployments/reviews 按时间合并 |
 | `GET` | `/api/projects/:id/diagnoses/latest` | 最新诊断（含 `dimensions` 与证据） |
 | `POST` | `/api/projects/:id/diagnoses` | 手动触发重新诊断（受每日配额限制） |

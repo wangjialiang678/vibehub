@@ -167,7 +167,11 @@ export async function buildApp({ probePreview = probePreviewHttp } = {}) {
   app.get('/api/me', { preHandler: authRequired() }, async (req) => {
     const user = db.prepare('SELECT id,username,display_name,real_name,avatar_url FROM users WHERE id=?').get(req.auth.user_id);
     const camp = db.prepare('SELECT id,slug,name,kind FROM camps WHERE id=?').get(req.auth.camp_id);
-    return { user, profile: profileForUser(req.auth.user_id, req.auth.camp_id), camp, role: req.auth.role, project_id: req.auth.project_id };
+    const profile = profileForUser(req.auth.user_id, req.auth.camp_id);
+    const scopedUser = profile
+      ? { ...user, display_name: profile.display_name, real_name: profile.real_name }
+      : user;
+    return { user: scopedUser, profile, camp, role: req.auth.role, project_id: req.auth.project_id };
   });
 
   app.patch('/api/me/profile', { preHandler: authRequired(['student']) }, async (req, reply) => {

@@ -221,7 +221,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .submit-mode-tabs { margin-bottom: 17px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .submit-mode-tabs button { min-height: 88px; padding: 15px 20px; display: grid; grid-template-columns: 35px 1fr; grid-template-rows: auto auto; align-content: center; column-gap: 12px; border: 1px solid var(--line); border-radius: 11px; color: var(--ink); background: rgba(255, 255, 255, .45); text-align: left; transition: border-color .18s ease, background .18s ease, transform .18s ease; }
 .submit-mode-tabs button:hover:not(:disabled) { border-color: var(--line-strong); transform: translateY(-1px); }
-.submit-mode-tabs button:focus-visible, .submit-file-option:focus-within, .field-label textarea:focus-visible { outline: 3px solid rgba(231, 103, 80, .2); outline-offset: 2px; }
+.submit-mode-tabs button:focus-visible, .submit-file-option:focus-within, .field-label textarea:focus-visible, .field-label input:focus-visible { outline: 3px solid rgba(231, 103, 80, .2); outline-offset: 2px; }
 .submit-mode-tabs button:disabled { cursor: not-allowed; opacity: .6; }
 .submit-mode-tabs button.is-active { border-color: #ef9f90; background: var(--coral-soft); box-shadow: inset 0 0 0 1px rgba(231, 103, 80, .12); }
 .submit-mode-tabs button > span { grid-row: 1 / 3; align-self: center; color: var(--coral); font: italic 18px/1 Georgia, "Songti SC", serif; }
@@ -251,8 +251,9 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .submit-form-grid { margin-top: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .field-label > span { margin-bottom: 8px; display: flex; justify-content: space-between; color: var(--ink); font-size: 12px; font-weight: 700; }
 .field-label > span small { color: var(--ink-soft); font-size: 10px; font-weight: 500; }
-.field-label textarea { width: 100%; resize: vertical; min-height: 112px; padding: 12px 13px; border: 1px solid var(--line-strong); border-radius: 9px; outline: 0; color: var(--ink); background: #fff; font-size: 13px; line-height: 1.55; }
-.field-label textarea::placeholder { color: #aaa49b; }
+.field-label textarea, .field-label input { width: 100%; padding: 12px 13px; border: 1px solid var(--line-strong); border-radius: 9px; outline: 0; color: var(--ink); background: #fff; font-size: 13px; line-height: 1.55; }
+.field-label textarea { resize: vertical; min-height: 112px; }
+.field-label textarea::placeholder, .field-label input::placeholder { color: #aaa49b; }
 .field-help { display: block; margin-top: 6px; color: var(--ink-soft); font-size: 10px; }
 .submit-progress { padding: 17px 27px; display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 16px; border-top: 1px solid var(--line); background: #fbf7f1; }
 .submit-progress-line { height: 5px; overflow: hidden; border-radius: 5px; background: #e5dfd6; }
