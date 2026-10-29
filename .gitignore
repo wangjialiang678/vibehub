@@ -1,5 +1,4 @@
 
-!.env.example
 # VibeLoop 运行数据
 # 依赖与构建
 # 前端构建
@@ -22,6 +21,9 @@
 .devloop/
 .env
 .env.*
+# 例外必须写在 .env.* 之后：gitignore 是后面的规则覆盖前面的
+!.env.example
+!*.env.example
 .idea/
 .vibeloop/
 .vite/

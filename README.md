@@ -5,6 +5,8 @@
 面向 Vibe Coding 教学、主题征集和 AI 黑客松场景的中心化管理、审核、部署与展示平台。学员从 VibeHub 官网复制一段自然语言给自己习惯的 AI 工具（Claude Code / Codex / WorkBuddy），由 AI 安装 **VibeHub Deploy**，再用邀请码连到任意营地；写完后让 AI 部署，就能拿到预览地址。老师在审核队列里预览、通过或退回；通过的作品拿到自己的网址和二维码，并汇入课程作品集合页。
 
 > 状态：核心黄金路径、学员网页直传、VibeHub Deploy 一次式安装与部署、学生自助创建多个作品、多营地连接和老师端学员说明均已实现。
+>
+> **要在自己的项目里复用这套东西**（换场景、只借部署管道、只借发布能力）→ [docs/handbook/reuse-guide.md](docs/handbook/reuse-guide.md)
 
 ---
 
@@ -72,16 +74,18 @@ npm run dev
 - [docs/research/codebase/方案对撞记录.md](docs/research/codebase/方案对撞记录.md) — 两份独立架构方案的对撞结论
 - [docs/research/codebase/architecture-proposal-codex-sol.md](docs/research/codebase/architecture-proposal-codex-sol.md) — Codex 独立起草的方案
 
-## 技术栈（拟定）
+## 技术栈（实际运行）
 
 | 层 | 选型 |
 |---|---|
 | 前端 | React 18 + Vite + TypeScript，手写 CSS（**不引 UI 组件库**，会毁掉原型的质感） |
-| 后端 | Node 20 + Fastify + SQLite(WAL)，单进程，pm2 托管 |
-| 静态承载 | nginx 直接 serve，作品不经过应用进程 |
-| 统计 | 复用自托管 umami |
-| 模型 | 复用 ai-game-camp-platform 的模型网关（国产模型 + 未成年人安全过滤 + 配额） |
-| 生产环境 | 腾讯云南京 Lighthouse，`supermind-ai.cn`（已备案） |
+| 后端 | Node 22 + Fastify 5 + SQLite(WAL)，单进程，**systemd** 托管 |
+| 静态承载 | nginx 直接 serve，作品不经过应用进程；发布用软链原子切换 |
+| 统计 | 自托管 umami（`page_views` 另有本地计数） |
+| 模型 | 模型网关（国产模型 + 未成年人安全过滤 + 配额），留空则只输出确定性诊断 |
+| 生产环境 | 腾讯云南京 Lighthouse，`hub.supermind-ai.cn`（泛解析 `*.preview` 走通配证书）。服务器地址与密钥不写入仓库，见部署手册 |
+
+环境变量清单见 [`server/.env.example`](server/.env.example)，部署步骤见 [`docs/handbook/deployment.md`](docs/handbook/deployment.md)。
 
 ## 开工前必须先做的事
 

@@ -156,3 +156,37 @@
 |---|---|
 | 服务端全量 | PASS（285/285，新增 1 项统计口径用例） |
 | Web 全量 | PASS（95/95） |
+
+## Round 5 — 2026-10-29 生产部署与复用文档
+
+阶段：上线
+
+### 部署记录
+
+- 目标：腾讯云南京 Lighthouse，`hub.supermind-ai.cn`；从 `20260815-061518` 升级到 `20261029-183756`（对应 `f25ea56`）。
+- 部署前备份：`/var/lib/vibehub/backup/pre-deploy-20261029-183722.sqlite`，`PRAGMA integrity_check` = `ok`（442 KB → 备份 479 KB）。
+- 服务端：rsync 到 `/opt/vibehub-releases/20261029-183756`，`npm ci --omit=dev`（27 MB），软链 `ln -sfn` + `mv -Tf` 原子切换，`systemctl restart vibehub`。
+- 前端：`web/dist` → `/var/www/vibehub-console/releases/20261029-183756`，`current` 软链切换。
+- `/etc/vibehub/vibehub.env` 未改动，预览 claim 不变。
+
+### 上线验证（从服务器外部发起）
+
+| 项目 | 期望 | 实测 |
+|---|---|---|
+| `GET /` | 200 且是新构建 | 200，`index-DOc0iWk2.js` / `index-ClV7VSPm.css` |
+| `GET /healthz`（机内） | 200 | 200 |
+| 无凭证 `GET /api/me` | 401 | 401 |
+| 公开合集 `stats` | 22 → 17 | `published: 17` |
+| 被隐藏的 5 个作品网址 | 仍 200 | 全部 200 |
+| 正常作品抽查 2 个 | 200 | 200 |
+| `/install` | 200 | 200 |
+| Skill manifest | 1.0.1 / 7 文件 / AGENTS.md 5761 B `c065b6c9…` | 一致 |
+| 服务日志 | 无 error | 仅 Node 的 SQLite experimental 警告 |
+
+`creators` 从 16 变成 14：这个数字原本是 `camp_members` 计数，现在按集合内作者去重；
+有 2 个作者（`player`、`feiyang`）的作品只在被隐藏的 5 张里，所以不再计入。
+
+### 复用性补强
+
+- 新增 `docs/handbook/reuse-guide.md` 与 `server/.env.example`；README 技术栈更正为实际运行形态（Node 22 + systemd）。
+- 修正 `.gitignore`：`.env.*` 规则排在 `!.env.example` 之后，把例外覆盖掉了，配置模板一直被忽略；例外移到 `.env.*` 之后。
