@@ -177,14 +177,20 @@
 | `GET /healthz`（机内） | 200 | 200 |
 | 无凭证 `GET /api/me` | 401 | 401 |
 | 公开合集 `stats` | 22 → 17 | `published: 17` |
-| 被隐藏的 5 个作品网址 | 仍 200 | 全部 200 |
-| 正常作品抽查 2 个 | 200 | 200 |
+| 被隐藏的 5 个作品网址（`supermind-ai.cn/vibehub/...`） | 仍 200 且有真实内容 | 全部 200，19010 / 6968 / 7068009 / 7066694 / 6098 bytes |
+| 正常作品抽查 2 个 | 200 且有真实内容 | 7544 / 186316 bytes |
 | `/install` | 200 | 200 |
 | Skill manifest | 1.0.1 / 7 文件 / AGENTS.md 5761 B `c065b6c9…` | 一致 |
 | 服务日志 | 无 error | 仅 Node 的 SQLite experimental 警告 |
 
 `creators` 从 16 变成 14：这个数字原本是 `camp_members` 计数，现在按集合内作者去重；
 有 2 个作者（`player`、`feiyang`）的作品只在被隐藏的 5 张里，所以不再计入。
+
+> 验证陷阱（记一笔）：**作品站点与控制台是两个域名**。作品 URL 由 `VIBEHUB_WORKS_ORIGIN`
+> 决定，生产是主域 `https://supermind-ai.cn/vibehub/<user>/<slug>/`；控制台在
+> `https://hub.supermind-ai.cn`。在控制台域名下拼作品路径会命中 SPA 兜底、返回 200 和
+> 445 bytes 的 index.html——**200 不等于作品还在**。核验作品必须用公开 API 返回的 `url` 字段，
+> 并同时看响应体大小。
 
 ### 复用性补强
 

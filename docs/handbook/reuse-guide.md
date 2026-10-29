@@ -117,6 +117,17 @@ bash scripts/loop-test.sh    # 一条命令跑完整闭环（含构建与分发�
 
 前端同理：`/var/www/vibehub-console/releases/<ts>` + `current` 软链。
 
+**两个域名不是一回事**，换环境时都要配：
+
+| 入口 | 变量 | 生产值 |
+|---|---|---|
+| 控制台 + API | `VIBEHUB_CONSOLE_ORIGIN` | `https://hub.supermind-ai.cn` |
+| 作品站点 | `VIBEHUB_WORKS_ORIGIN` + `VIBEHUB_WORKS_PREFIX` | `https://supermind-ai.cn` + `/vibehub` |
+| 预览 | `VIBEHUB_PREVIEW_ORIGIN_TEMPLATE` | `https://{previewId}.preview.supermind-ai.cn` |
+
+在控制台域名下拼作品路径会命中 SPA 兜底、返回 **200** 和一个 445 字节的 index.html。
+核验作品必须用公开 API 返回的 `url` 字段，并同时看响应体大小。
+
 `/etc/vibehub/vibehub.env` 里的 `VIBEHUB_PREVIEW_CLAIM_SECRET` **一旦轮换，所有未过期的预览链接立即失效**。
 
 ## 别踩的坑
