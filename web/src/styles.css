@@ -432,6 +432,9 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .collection-manager-actions button:hover:not(:disabled) { border-color: var(--ink-soft); color: var(--ink); }
 .collection-manager-actions button.is-featured { border-color: var(--line-strong); color: var(--blue); background: var(--surface-soft); }
 .collection-manager-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.collection-manager li.is-hidden { background: var(--surface-soft); }
+.collection-manager li.is-hidden strong, .collection-manager li.is-hidden span { color: var(--ink-soft); }
+.collection-manager-actions button.is-hidden { border-color: var(--line-strong); color: var(--ink); background: var(--surface-soft); }
 .invite-layout { display: grid; grid-template-columns: minmax(240px, .45fr) minmax(0, 1.55fr); gap: 20px; align-items: start; }
 .invite-main { min-width: 0; display: grid; gap: 20px; }
 .invite-create { padding: 25px; }

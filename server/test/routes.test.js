@@ -1341,6 +1341,102 @@ test('公开集合将推荐作品置顶，并且只白名单返回推荐标记',
   ]);
 });
 
+test('合集隐藏只移除集合卡片，不改变项目发布状态和正式版本', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const shown = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const hidden = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const shownVersion = addVersion(shown.id, owner.id, 1);
+  const hiddenVersion = addVersion(hidden.id, owner.id, 1);
+  db.prepare('UPDATE projects SET live_version_id=? WHERE id=?').run(shownVersion.id, shown.id);
+  db.prepare('UPDATE projects SET live_version_id=?,collection_hidden=1 WHERE id=?').run(hiddenVersion.id, hidden.id);
+
+  const result = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
+
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.json().items.map(({ slug }) => slug), [shown.slug]);
+  const hiddenAfter = db.prepare('SELECT publish_status,live_version_id FROM projects WHERE id=?').get(hidden.id);
+  assert.equal(hiddenAfter.publish_status, 'published');
+  assert.equal(hiddenAfter.live_version_id, hiddenVersion.id);
+});
+
+test('老师可以从集合页编排里隐藏和恢复作品，发布状态与作品网址不受影响', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const version = addVersion(project.id, owner.id, 1);
+  db.prepare('UPDATE projects SET live_version_id=? WHERE id=?').run(version.id, project.id);
+  const { token } = teacherToken(camp.id);
+
+  const hide = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/collection`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { items: [{ project_id: project.id, order: 0, recommended: false, hidden: true }] },
+  });
+  assert.equal(hide.statusCode, 200);
+  const hiddenCamp = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
+  assert.deepEqual(hiddenCamp.json().items, []);
+  assert.equal(hiddenCamp.json().stats.published, 0);
+  const stillLive = await app.inject({ method: 'GET', url: `/api/public/projects/${project.slug}` });
+  assert.equal(stillLive.statusCode, 200);
+  const afterHide = db.prepare('SELECT publish_status,live_version_id,collection_hidden FROM projects WHERE id=?').get(project.id);
+  assert.equal(afterHide.publish_status, 'published');
+  assert.equal(afterHide.live_version_id, version.id);
+  assert.equal(afterHide.collection_hidden, 1);
+
+  const show = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/collection`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { items: [{ project_id: project.id, order: 0, recommended: false, hidden: false }] },
+  });
+  assert.equal(show.statusCode, 200);
+  const shownCamp = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
+  assert.deepEqual(shownCamp.json().items.map(({ slug }) => slug), [project.slug]);
+});
+
+test('只调整排序和推荐位时不覆盖已有的合集隐藏状态', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const project = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const version = addVersion(project.id, owner.id, 1);
+  db.prepare('UPDATE projects SET live_version_id=?,collection_hidden=1 WHERE id=?').run(version.id, project.id);
+  const { token } = teacherToken(camp.id);
+
+  const reorder = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/collection`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: { items: [{ project_id: project.id, order: 7, recommended: true }] },
+  });
+  assert.equal(reorder.statusCode, 200);
+  const row = db.prepare('SELECT collection_order,collection_recommended,collection_hidden FROM projects WHERE id=?').get(project.id);
+  assert.equal(row.collection_order, 7);
+  assert.equal(row.collection_recommended, 1);
+  assert.equal(row.collection_hidden, 1);
+});
+
+test('hidden 传非布尔值时整批拒绝，不留下半截排序', async () => {
+  const camp = createCamp();
+  const owner = createUser(camp.id);
+  const first = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const second = createProject(camp.id, owner.id, { publishStatus: 'published' });
+  const { token } = teacherToken(camp.id);
+
+  const rejected = await app.inject({
+    method: 'POST', url: `/api/camps/${camp.id}/collection`,
+    headers: { authorization: `Bearer ${token}` },
+    payload: {
+      items: [
+        { project_id: first.id, order: 5, recommended: true },
+        { project_id: second.id, order: 6, recommended: false, hidden: 'yes' },
+      ],
+    },
+  });
+  assert.equal(rejected.statusCode, 400);
+  assert.equal(rejected.json().error.code, 'invalid_collection');
+  const rows = db.prepare('SELECT collection_order,collection_recommended FROM projects WHERE camp_id=? ORDER BY created_at,id').all(camp.id);
+  assert.deepEqual(rows.map((row) => [row.collection_order, row.collection_recommended]), [[0, 0], [0, 0]]);
+});
+
 test('camp_only 可见性的课程，公开端返回 404', async () => {
   const camp = createCamp({ visibility: 'camp_only' });
   const result = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });

@@ -189,7 +189,7 @@ Node 在每次预览文件请求时同时校验 host 与 `preview_id` 匹配、�
 | `POST` | `/api/projects/:id/suspend` | 下线已发布作品 |
 | `POST` | `/api/projects/:id/resume` | 恢复 |
 | `PATCH` | `/api/projects/:id/visibility` | 覆盖课程默认可见性 |
-| `POST` | `/api/camps/:id/collection` | 集合页排序/推荐位管理 |
+| `POST` | `/api/camps/:id/collection` | 集合页排序/推荐位/合集可见性管理：`{items:[{project_id, order, recommended, hidden?}]}`；`hidden` 为可选布尔值，缺省表示不改动 |
 
 ### 学员身份与名单
 

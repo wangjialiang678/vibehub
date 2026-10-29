@@ -340,21 +340,32 @@ export default async function adminRoutes(app) {
   app.post('/api/camps/:campId/collection', { preHandler: teacherOnly }, async (req, reply) => {
     if (req.params.campId !== req.auth.camp_id) return err(reply, 'not_found', 404, '找不到这个课程。');
     const items = req.body?.items;
-    if (!Array.isArray(items)) return err(reply, 'invalid_collection', 400, '集合页排序数据格式不正确。', '传入 items 数组，每项包含 project_id、order 和 recommended');
+    if (!Array.isArray(items)) return err(reply, 'invalid_collection', 400, '集合页排序数据格式不正确。', '传入 items 数组，每项包含 project_id、order 和 recommended；hidden 可选');
     try {
       db.exec('BEGIN');
       for (const [index, item] of items.entries()) {
         const project = db.prepare('SELECT id FROM projects WHERE id=? AND camp_id=?').get(item?.project_id, req.params.campId);
         if (!project) throw new Error('invalid_project');
+        // hidden 是可选开关：带 boolean 才改动合集可见性，缺省时保持原值，
+        // 这样只调排序/推荐位的旧调用方不会意外把作品从合集里放出来或藏起来。
+        if (item.hidden !== undefined && typeof item.hidden !== 'boolean') throw new Error('invalid_hidden');
         const order = Number.isInteger(item.order) ? item.order : index;
-        db.prepare(`UPDATE projects SET collection_order=?,collection_recommended=?,updated_at=? WHERE id=?`)
-          .run(order, item.recommended ? 1 : 0, now(), project.id);
+        if (item.hidden === undefined) {
+          db.prepare(`UPDATE projects SET collection_order=?,collection_recommended=?,updated_at=? WHERE id=?`)
+            .run(order, item.recommended ? 1 : 0, now(), project.id);
+        } else {
+          db.prepare(`UPDATE projects SET collection_order=?,collection_recommended=?,collection_hidden=?,updated_at=? WHERE id=?`)
+            .run(order, item.recommended ? 1 : 0, item.hidden ? 1 : 0, now(), project.id);
+        }
       }
       db.exec('COMMIT');
     } catch (error) {
       try { db.exec('ROLLBACK'); } catch { /* 未开启事务时无需回滚 */ }
+      if (error?.message === 'invalid_hidden') {
+        return err(reply, 'invalid_collection', 400, '合集可见状态只能是 true 或 false。', 'hidden 字段留空表示不改动合集可见性');
+      }
       return err(reply, 'invalid_collection', 400, '集合页里包含不属于本课程的作品。', '只传入当前课程下的项目 ID');
     }
-    return { ok: true, updated: items.length, message: '集合页排序和推荐位已保存。' };
+    return { ok: true, updated: items.length, message: '集合页设置已保存。' };
   });
 }

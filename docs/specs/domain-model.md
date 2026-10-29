@@ -114,6 +114,7 @@ CREATE TABLE projects (
   visibility    TEXT,                       -- NULL=继承 camp 默认
   collection_order INTEGER NOT NULL DEFAULT 0,       -- 集合页同一分组内的手工顺序
   collection_recommended INTEGER NOT NULL DEFAULT 0, -- 1=推荐位，排在普通作品之前
+  collection_hidden INTEGER NOT NULL DEFAULT 0,      -- 1=保留发布和网址，但不出现在公开合集
   live_version_id    TEXT REFERENCES versions(id),  -- 当前正式发布版本
   pending_version_id TEXT REFERENCES versions(id),  -- 当前待审核版本
   umami_website_id   TEXT,
@@ -218,14 +219,24 @@ CREATE INDEX idx_diag_version ON diagnoses(version_id, created_at DESC);
 `collection_entries` 是早期设计，**当前实现没有创建或查询这张表**。启动时
 `server/src/lib/db.js` 通过幂等迁移为 `projects` 补上
 `collection_order INTEGER NOT NULL DEFAULT 0` 与
-`collection_recommended INTEGER NOT NULL DEFAULT 0`；上面的字段即为运行中的真实模型。
+`collection_recommended INTEGER NOT NULL DEFAULT 0`、
+`collection_hidden INTEGER NOT NULL DEFAULT 0`；上面的字段即为运行中的真实模型。
 
-老师调用 `POST /api/camps/:campId/collection` 时，逐条更新这两个 `projects` 字段。
+老师调用 `POST /api/camps/:campId/collection` 时，逐条更新这三个 `projects` 字段。
+`hidden` 是可选字段：请求里带布尔值才改动 `collection_hidden`，缺省保持原值，
+避免只调排序/推荐位的调用方意外改变合集可见性；非布尔值整批拒绝并回滚。
+隐藏只让卡片退出公开合集，项目的 `publish_status`、`live_version_id` 与站点软链均不变。
 公开集合页查询只选择 `publish_status IN ('published','published_with_pending')`、
-`live_version_id IS NOT NULL` 的本课程项目，随后按
+`live_version_id IS NOT NULL` 且 `collection_hidden=0` 的本课程项目，随后按
 `collection_recommended DESC, collection_order ASC, updated_at DESC` 排序；
 `camp_only` 可见性项目会在返回前被过滤。返回的 `featured` 标记直接来自
 `collection_recommended`。这些约束由 `server/src/routes/public.js` 的查询和白名单返回体执行。
+
+### 1.10 historical_imports — 历史归档幂等台账
+
+管理员从营地旧服务器或本地归档复制作品时，`historical_imports` 保存稳定来源键、
+原始副本 SHA 与路径兼容处理后的正式版本 SHA。增量导入据此判断同一来源是否已经完成，
+既允许安全重试，也不会用同名但内容不同的目录覆盖既有作品。
 
 ---
 

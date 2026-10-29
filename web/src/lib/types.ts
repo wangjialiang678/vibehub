@@ -132,12 +132,14 @@ export interface CampProject {
   id: string; title: string; owner_name: string; owner_username?: string; updated_at?: string | null;
   dev_status?: string | null; publish_status?: string | null; pending_version_id?: string | null;
   collection_order?: number | null; collection_recommended?: boolean | number | null;
+  collection_hidden?: boolean | number | null;
 }
 
 export interface CollectionUpdate {
   project_id: string;
   order: number;
   recommended: boolean;
+  hidden?: boolean;
 }
 
 export interface InviteListItem {

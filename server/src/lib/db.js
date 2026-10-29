@@ -225,6 +225,17 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_audit_camp ON audit_logs(camp_id, created_at DESC);
+
+-- 管理员历史归档的幂等台账：区分原始副本指纹与路径重写后的正式版本指纹。
+CREATE TABLE IF NOT EXISTS historical_imports (
+  source_key TEXT PRIMARY KEY,
+  camp_id TEXT NOT NULL REFERENCES camps(id),
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  source_sha TEXT NOT NULL,
+  version_sha TEXT NOT NULL,
+  imported_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_historical_imports_project ON historical_imports(project_id);
 `);
 
 // 本地第一版已经可能有数据；SQLite 的 CREATE TABLE 不会补列，所以在启动时做
@@ -253,5 +264,6 @@ db.exec('CREATE INDEX IF NOT EXISTS idx_tokens_derived_from ON tokens(derived_fr
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_creation_request
          ON projects(owner_user_id,camp_id,creation_request_id)
          WHERE creation_request_id IS NOT NULL`);
+ensureColumn('projects', 'collection_hidden', 'INTEGER NOT NULL DEFAULT 0');
 
 export const now = () => new Date().toISOString();

@@ -64,11 +64,19 @@ function ProjectsDesk({ campId, campSlug, campName }: { campId: string; campSlug
     const updated = next.find((item) => item.id === projectId)!;
     saveCollection(next, [toCollectionUpdate(updated)]);
   };
+  const toggleHidden = (projectId: string) => {
+    const changed = collectionItems.find((item) => item.id === projectId);
+    if (!changed) return;
+    const hidden = !Boolean(changed.collection_hidden);
+    const next = collectionItems.map((item) => item.id === projectId ? { ...item, collection_hidden: hidden } : item);
+    const updated = next.find((item) => item.id === projectId)!;
+    saveCollection(next, [{ ...toCollectionUpdate(updated), hidden }]);
+  };
 
   return <main className="dashboard-content teacher-content">
     <header className="page-heading"><div><p className="breadcrumb">{campName}　/　项目</p><h1>全部项目</h1><p className="review-counts"><b>{projects.data.items.length}</b> 个项目　·　按最近更新排序</p></div><ModeTabs campSlug={campSlug} active="admin" /></header>
     {collectionNotice && <p className="action-message">{collectionNotice}</p>}
-    <section className="panel collection-manager"><header><div><p className="eyebrow">公开集合页</p><h2>集合页编排</h2><p>推荐作品会固定在最前；可分别调整推荐区和普通区的顺序。</p></div><span>{collectionMutation.isPending ? '正在保存…' : '保存后立即生效'}</span></header>{collectionItems.length ? <ol>{collectionItems.map((item, index) => { const recommended = Boolean(item.collection_recommended); const previousSameGroup = index > 0 && recommended === Boolean(collectionItems[index - 1].collection_recommended); const nextSameGroup = index < collectionItems.length - 1 && recommended === Boolean(collectionItems[index + 1].collection_recommended); return <li key={item.id}><div><strong>{item.title || '未命名作品'}</strong><span>{item.owner_name}　·　{recommended ? '推荐位' : '普通作品'}</span></div><div className="collection-manager-actions"><button className={recommended ? 'is-featured' : ''} onClick={() => toggleFeatured(item.id)} disabled={collectionMutation.isPending}>{recommended ? '取消推荐' : '设为推荐'}</button><button aria-label={`上移 ${item.title}`} onClick={() => moveItem(index, -1)} disabled={!previousSameGroup || collectionMutation.isPending}>上移</button><button aria-label={`下移 ${item.title}`} onClick={() => moveItem(index, 1)} disabled={!nextSameGroup || collectionMutation.isPending}>下移</button></div></li>; })}</ol> : <div className="teacher-empty"><strong>课程里还没有项目</strong><p>作品创建后，可以在这里调整它在公开集合页中的位置。</p></div>}</section>
+    <section className="panel collection-manager"><header><div><p className="eyebrow">公开集合页</p><h2>集合页编排</h2><p>推荐作品会固定在最前；可分别调整推荐区和普通区的顺序。隐藏只把卡片移出公开合集，作品网址仍然可以访问。</p></div><span>{collectionMutation.isPending ? '正在保存…' : '保存后立即生效'}</span></header>{collectionItems.length ? <ol>{collectionItems.map((item, index) => { const recommended = Boolean(item.collection_recommended); const hidden = Boolean(item.collection_hidden); const previousSameGroup = index > 0 && recommended === Boolean(collectionItems[index - 1].collection_recommended); const nextSameGroup = index < collectionItems.length - 1 && recommended === Boolean(collectionItems[index + 1].collection_recommended); return <li className={hidden ? 'is-hidden' : ''} key={item.id}><div><strong>{item.title || '未命名作品'}</strong><span>{item.owner_name}　·　{hidden ? '已从合集隐藏' : recommended ? '推荐位' : '普通作品'}</span></div><div className="collection-manager-actions"><button className={recommended ? 'is-featured' : ''} onClick={() => toggleFeatured(item.id)} disabled={collectionMutation.isPending}>{recommended ? '取消推荐' : '设为推荐'}</button><button aria-label={`上移 ${item.title}`} onClick={() => moveItem(index, -1)} disabled={!previousSameGroup || collectionMutation.isPending}>上移</button><button aria-label={`下移 ${item.title}`} onClick={() => moveItem(index, 1)} disabled={!nextSameGroup || collectionMutation.isPending}>下移</button><button className={hidden ? 'is-hidden' : ''} aria-label={`${hidden ? '恢复展示' : '从合集隐藏'} ${item.title}`} onClick={() => toggleHidden(item.id)} disabled={collectionMutation.isPending}>{hidden ? '恢复展示' : '从合集隐藏'}</button></div></li>; })}</ol> : <div className="teacher-empty"><strong>课程里还没有项目</strong><p>作品创建后，可以在这里调整它在公开集合页中的位置。</p></div>}</section>
     <section className={`projects-workspace${projectId ? ' has-selected' : ''}`}>
       <article className="panel project-directory">{projects.data.items.length ? <ul>{projects.data.items.map((item) => { const status = getProjectStatus({ publish_status: item.publish_status, pending_version: item.pending_version_id, last_review: item.dev_status === 'needs_revision' ? { status: 'rejected' } : null }); return <li className={item.id === projectId ? 'is-current' : ''} key={item.id}><Link to={`/admin/projects/${item.id}`}><div><strong>{item.title || '未命名作品'}</strong><span>{item.owner_name}　·　{formatDateTime(item.updated_at)}</span></div><StatusPill tone={status.tone}>{status.label}</StatusPill></Link></li>; })}</ul> : <div className="teacher-empty"><strong>课程里还没有项目</strong><p>学员使用邀请码进入后，会自动创建自己的项目。</p></div>}</article>
       {projectId && <ProjectBoard isLoading={selected.isPending} error={selected.error} snapshot={selected.data} />}
@@ -81,7 +89,10 @@ function orderCollectionItems(items: CampProject[]) {
 }
 
 function toCollectionUpdate(item: CampProject): CollectionUpdate {
-  return { project_id: item.id, order: Number(item.collection_order || 0), recommended: Boolean(item.collection_recommended) };
+  const update: CollectionUpdate = { project_id: item.id, order: Number(item.collection_order || 0), recommended: Boolean(item.collection_recommended) };
+  // hidden 只在项目数据带了这个字段时才下发：旧数据源没有该列时不无谓地覆盖合集可见性。
+  if (item.collection_hidden !== undefined) update.hidden = Boolean(item.collection_hidden);
+  return update;
 }
 
 export function getCollectionUpdates(before: CampProject[], after: CampProject[]): CollectionUpdate[] {
@@ -89,7 +100,7 @@ export function getCollectionUpdates(before: CampProject[], after: CampProject[]
   return after.filter((item) => {
     const previous = beforeByProjectId.get(item.id);
     const current = toCollectionUpdate(item);
-    return !previous || previous.order !== current.order || previous.recommended !== current.recommended;
+    return !previous || previous.order !== current.order || previous.recommended !== current.recommended || previous.hidden !== current.hidden;
   }).map(toCollectionUpdate);
 }
 

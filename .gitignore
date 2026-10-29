@@ -26,6 +26,7 @@
 .vibeloop/
 .vite/
 .vscode/
+.workbuddy/
 Thumbs.db
 api-vault.env
 build/

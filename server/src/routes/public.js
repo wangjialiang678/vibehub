@@ -35,7 +35,7 @@ export default async function publicRoutes(app) {
       JOIN users u ON u.id=p.owner_user_id
       LEFT JOIN versions v ON v.id=p.live_version_id
       WHERE p.camp_id=? AND p.publish_status IN ('published','published_with_pending')
-        AND p.live_version_id IS NOT NULL
+        AND p.live_version_id IS NOT NULL AND p.collection_hidden=0
       ORDER BY p.collection_recommended DESC,p.collection_order ASC,p.updated_at DESC`).all(camp.id);
 
     const items = rows

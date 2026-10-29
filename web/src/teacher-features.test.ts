@@ -78,6 +78,8 @@ describe('老师端 P0 功能', () => {
     expect(api).toContain('updateCollection: (campId: string, items:');
     expect(projects).toContain('集合页编排');
     expect(projects).toContain('设为推荐');
+    expect(projects).toContain('从合集隐藏');
+    expect(projects).toContain('恢复展示');
     expect(projects).toContain('上移');
     expect(projects).toContain('下移');
     expect(collection).toContain('item.featured');
@@ -96,6 +98,22 @@ describe('老师端 P0 功能', () => {
     expect(getCollectionUpdates(before, after)).toEqual([
       { project_id: 'project-b', order: 0, recommended: false },
       { project_id: 'project-a', order: 1, recommended: false },
+    ]);
+  });
+
+  it('persists a collection visibility change without touching order or featured state', () => {
+    const before = [
+      { id: 'project-a', title: 'A', owner_name: '甲', collection_order: 3, collection_recommended: false, collection_hidden: 0 },
+      { id: 'project-b', title: 'B', owner_name: '乙', collection_order: 4, collection_recommended: false, collection_hidden: 1 },
+    ];
+    const after = [
+      { ...before[0], collection_hidden: 1 },
+      { ...before[1], collection_hidden: 0 },
+    ];
+
+    expect(getCollectionUpdates(before, after)).toEqual([
+      { project_id: 'project-a', order: 3, recommended: false, hidden: true },
+      { project_id: 'project-b', order: 4, recommended: false, hidden: false },
     ]);
   });
 });
