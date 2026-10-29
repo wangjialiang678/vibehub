@@ -25,7 +25,7 @@ export default async function adminRoutes(app) {
 
     const counts = db.prepare(`
       SELECT
-        (SELECT COUNT(*) FROM camp_members WHERE camp_id=$c) AS members,
+        (SELECT COUNT(*) FROM camp_members WHERE camp_id=$c AND role='student') AS members,
         (SELECT COUNT(*) FROM invites WHERE camp_id=$c AND status='bound') AS invites_bound,
         (SELECT COUNT(*) FROM invites WHERE camp_id=$c) AS invites_total,
         (SELECT COUNT(*) FROM projects WHERE camp_id=$c) AS projects,

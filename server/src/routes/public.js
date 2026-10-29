@@ -56,12 +56,14 @@ export default async function publicRoutes(app) {
         };
       });
 
-    const members = db.prepare('SELECT COUNT(*) AS n FROM camp_members WHERE camp_id=?').get(camp.id);
+    // 创作者按实际出现在集合里的作者去重，不数营地里的人：老师也算成员，
+    // 用成员数会把老师算成创作者，也会把没有作品的学员算进来。
+    const creators = new Set(items.map((item) => item.author).filter(Boolean)).size;
     return {
       camp: { slug: camp.slug, name: camp.name, kind: camp.kind, theme: camp.theme, intro: camp.intro, cover_url: camp.cover_url },
       stats: {
         published: items.length,
-        creators: Number(members?.n || 0),
+        creators,
         categories: [...new Set(items.map((i) => i.category).filter(Boolean))].length,
       },
       categories: [...new Set(items.map((i) => i.category).filter(Boolean))],

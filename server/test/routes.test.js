@@ -1437,6 +1437,25 @@ test('hidden 传非布尔值时整批拒绝，不留下半截排序', async () =
   assert.deepEqual(rows.map((row) => [row.collection_order, row.collection_recommended]), [[0, 0], [0, 0]]);
 });
 
+test('集合页创作者数按作品作者去重，管理台参与人数不把老师算进去', async () => {
+  const camp = createCamp();
+  const { token } = teacherToken(camp.id);
+  const author = createUser(camp.id);
+  createUser(camp.id);
+  const project = createProject(camp.id, author.id, { publishStatus: 'published' });
+  const version = addVersion(project.id, author.id, 1);
+  db.prepare('UPDATE projects SET live_version_id=? WHERE id=?').run(version.id, project.id);
+
+  const collection = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
+  assert.equal(collection.statusCode, 200);
+  assert.equal(collection.json().stats.published, 1);
+  assert.equal(collection.json().stats.creators, 1);
+
+  const overview = await app.inject({ method: 'GET', url: `/api/camps/${camp.id}/overview`, headers: { authorization: `Bearer ${token}` } });
+  assert.equal(overview.statusCode, 200);
+  assert.equal(overview.json().counts.members, 2);
+});
+
 test('camp_only 可见性的课程，公开端返回 404', async () => {
   const camp = createCamp({ visibility: 'camp_only' });
   const result = await app.inject({ method: 'GET', url: `/api/public/camps/${camp.slug}` });
